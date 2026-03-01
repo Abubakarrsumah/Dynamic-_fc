@@ -137,43 +137,84 @@ def _create_tables():
         )
     ''')
     conn.commit()
-    # Insert default superadmin if not exists
-    cursor.execute("SELECT * FROM users WHERE username='admin'")
-    if not cursor.fetchone():
-        hashed = hashlib.sha256('admin123'.encode()).hexdigest()
-        cursor.execute("INSERT INTO users (username, password_hash, role, club) VALUES (?,?,?,?)",
-                       ('admin', hashed, 'superadmin', 'Dynamic FC (Falaba District)'))
-        conn.commit()
+
+def _ensure_schema():
+    """Ensure all tables have the required columns (schema migration)."""
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    
+    # Helper to add column if missing
+    def add_column_if_not_exists(table, column, col_type):
+        cursor.execute(f"PRAGMA table_info({table})")
+        columns = [col[1] for col in cursor.fetchall()]
+        if column not in columns:
+            try:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                conn.commit()
+            except Exception as e:
+                # Column might already exist or other error
+                pass
+
+    # Add club column to all tables that might be missing it (legacy tables)
+    for table in ['players', 'finances', 'investors', 'health', 'transfers']:
+        add_column_if_not_exists(table, 'club', 'TEXT')
+    
+    # Add any other missing columns (optional, for completeness)
+    # Players table
+    add_column_if_not_exists('players', 'photo', 'BLOB')
+    add_column_if_not_exists('players', 'monthly_salary', 'REAL')
+    # etc.
 
 def _load_players():
-    conn = st.session_state.db_conn
-    club = st.session_state.club
-    df = pd.read_sql("SELECT * FROM players WHERE club=?", conn, params=(club,))
-    return df.to_dict('records') if not df.empty else []
+    try:
+        conn = st.session_state.db_conn
+        club = st.session_state.club
+        df = pd.read_sql("SELECT * FROM players WHERE club=?", conn, params=(club,))
+        return df.to_dict('records') if not df.empty else []
+    except Exception as e:
+        # If error occurs (e.g., missing table/column), return empty list
+        st.error(f"Error loading players: {e}")
+        return []
 
 def _load_finances():
-    conn = st.session_state.db_conn
-    club = st.session_state.club
-    df = pd.read_sql("SELECT * FROM finances WHERE club=?", conn, params=(club,))
-    return df.to_dict('records') if not df.empty else []
+    try:
+        conn = st.session_state.db_conn
+        club = st.session_state.club
+        df = pd.read_sql("SELECT * FROM finances WHERE club=?", conn, params=(club,))
+        return df.to_dict('records') if not df.empty else []
+    except Exception as e:
+        st.error(f"Error loading finances: {e}")
+        return []
 
 def _load_investors():
-    conn = st.session_state.db_conn
-    club = st.session_state.club
-    df = pd.read_sql("SELECT * FROM investors WHERE club=?", conn, params=(club,))
-    return df.to_dict('records') if not df.empty else []
+    try:
+        conn = st.session_state.db_conn
+        club = st.session_state.club
+        df = pd.read_sql("SELECT * FROM investors WHERE club=?", conn, params=(club,))
+        return df.to_dict('records') if not df.empty else []
+    except Exception as e:
+        st.error(f"Error loading investors: {e}")
+        return []
 
 def _load_health():
-    conn = st.session_state.db_conn
-    club = st.session_state.club
-    df = pd.read_sql("SELECT * FROM health WHERE club=?", conn, params=(club,))
-    return df.to_dict('records') if not df.empty else []
+    try:
+        conn = st.session_state.db_conn
+        club = st.session_state.club
+        df = pd.read_sql("SELECT * FROM health WHERE club=?", conn, params=(club,))
+        return df.to_dict('records') if not df.empty else []
+    except Exception as e:
+        st.error(f"Error loading health records: {e}")
+        return []
 
 def _load_transfers():
-    conn = st.session_state.db_conn
-    club = st.session_state.club
-    df = pd.read_sql("SELECT * FROM transfers WHERE club=?", conn, params=(club,))
-    return df.to_dict('records') if not df.empty else []
+    try:
+        conn = st.session_state.db_conn
+        club = st.session_state.club
+        df = pd.read_sql("SELECT * FROM transfers WHERE club=?", conn, params=(club,))
+        return df.to_dict('records') if not df.empty else []
+    except Exception as e:
+        st.error(f"Error loading transfers: {e}")
+        return []
 
 def _save_player(player_data):
     conn = st.session_state.db_conn
@@ -385,6 +426,7 @@ if 'club' not in st.session_state:
 if 'db_conn' not in st.session_state:
     st.session_state.db_conn = sqlite3.connect('dynamic_fc.db', check_same_thread=False)
     _create_tables()
+    _ensure_schema()  # Ensure all columns exist (migration)
 if 'players' not in st.session_state:
     st.session_state.players = _load_players()
 if 'finances' not in st.session_state:
@@ -402,6 +444,19 @@ if 'messages' not in st.session_state:
 if 'encryption_key' not in st.session_state and CRYPTO_AVAILABLE:
     st.session_state.encryption_key = Fernet.generate_key()
     st.session_state.cipher = Fernet(st.session_state.encryption_key)
+
+# Insert default superadmin if not exists (ensure it runs after tables exist)
+try:
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE username='admin'")
+    if not cursor.fetchone():
+        hashed = hashlib.sha256('admin123'.encode()).hexdigest()
+        cursor.execute("INSERT INTO users (username, password_hash, role, club) VALUES (?,?,?,?)",
+                       ('admin', hashed, 'superadmin', 'Dynamic FC (Falaba District)'))
+        conn.commit()
+except Exception as e:
+    st.error(f"Error creating default admin: {e}")
 
 # ------------------------------
 # 5. SIDEBAR NAVIGATION

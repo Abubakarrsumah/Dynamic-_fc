@@ -4,6 +4,9 @@ Professional club management application with all requested features.
 Run with: streamlit run football_app.py
 """
 
+# ------------------------------
+# 1. IMPORTS (with graceful fallbacks)
+# ------------------------------
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -14,13 +17,13 @@ import json
 import sqlite3
 import base64
 import os
+import uuid
 from io import BytesIO
 from PIL import Image
 import plotly.express as px
 import plotly.graph_objects as go
-import uuid
 
-# Optional imports with graceful fallback
+# Optional imports
 try:
     from fpdf import FPDF
     FPDF_AVAILABLE = True
@@ -40,7 +43,7 @@ except ImportError:
     OPENAI_AVAILABLE = False
 
 # ------------------------------
-# Page configuration (must be first Streamlit command)
+# 2. PAGE CONFIGURATION (must be first Streamlit command)
 # ------------------------------
 st.set_page_config(
     page_title="Dynamic FC Management",
@@ -50,42 +53,10 @@ st.set_page_config(
 )
 
 # ------------------------------
-# Session state initialization
+# 3. HELPER FUNCTIONS (defined before use)
 # ------------------------------
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'username' not in st.session_state:
-    st.session_state.username = None
-if 'role' not in st.session_state:
-    st.session_state.role = 'guest'  # superadmin, admin, manager, viewer
-if 'club' not in st.session_state:
-    st.session_state.club = 'Dynamic FC (Falaba District)'
-if 'db_conn' not in st.session_state:
-    # Initialize SQLite database (simulates cloud database)
-    st.session_state.db_conn = sqlite3.connect('dynamic_fc.db', check_same_thread=False)
-    _create_tables()
-if 'players' not in st.session_state:
-    st.session_state.players = _load_players()
-if 'finances' not in st.session_state:
-    st.session_state.finances = _load_finances()
-if 'investors' not in st.session_state:
-    st.session_state.investors = _load_investors()
-if 'health_records' not in st.session_state:
-    st.session_state.health_records = _load_health()
-if 'transfers' not in st.session_state:
-    st.session_state.transfers = _load_transfers()
-if 'training_logs' not in st.session_state:
-    st.session_state.training_logs = []
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
-if 'encryption_key' not in st.session_state and CRYPTO_AVAILABLE:
-    # For demo, generate a key (in production, store securely)
-    st.session_state.encryption_key = Fernet.generate_key()
-    st.session_state.cipher = Fernet(st.session_state.encryption_key)
 
-# ------------------------------
 # Database helper functions
-# ------------------------------
 def _create_tables():
     """Create necessary tables if they don't exist."""
     conn = st.session_state.db_conn
@@ -309,9 +280,7 @@ def _change_password(username, new_password):
     cursor.execute("UPDATE users SET password_hash=? WHERE username=?", (hashed, username))
     conn.commit()
 
-# ------------------------------
 # Utility functions
-# ------------------------------
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -334,8 +303,7 @@ def logout():
 def generate_pdf_receipt(data):
     """Generate a PDF receipt for a transaction."""
     if not FPDF_AVAILABLE:
-        st.error("FPDF not installed. Cannot generate PDF.")
-        return b''
+        return None
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -404,7 +372,39 @@ def simulate_email_report(report):
     st.info(f"📧 Email report sent to admins: {report[:100]}...")
 
 # ------------------------------
-# Sidebar navigation
+# 4. SESSION STATE INITIALIZATION (now functions are defined)
+# ------------------------------
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'username' not in st.session_state:
+    st.session_state.username = None
+if 'role' not in st.session_state:
+    st.session_state.role = 'guest'
+if 'club' not in st.session_state:
+    st.session_state.club = 'Dynamic FC (Falaba District)'
+if 'db_conn' not in st.session_state:
+    st.session_state.db_conn = sqlite3.connect('dynamic_fc.db', check_same_thread=False)
+    _create_tables()
+if 'players' not in st.session_state:
+    st.session_state.players = _load_players()
+if 'finances' not in st.session_state:
+    st.session_state.finances = _load_finances()
+if 'investors' not in st.session_state:
+    st.session_state.investors = _load_investors()
+if 'health_records' not in st.session_state:
+    st.session_state.health_records = _load_health()
+if 'transfers' not in st.session_state:
+    st.session_state.transfers = _load_transfers()
+if 'training_logs' not in st.session_state:
+    st.session_state.training_logs = []
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+if 'encryption_key' not in st.session_state and CRYPTO_AVAILABLE:
+    st.session_state.encryption_key = Fernet.generate_key()
+    st.session_state.cipher = Fernet(st.session_state.encryption_key)
+
+# ------------------------------
+# 5. SIDEBAR NAVIGATION
 # ------------------------------
 def navigation():
     with st.sidebar:
@@ -413,7 +413,6 @@ def navigation():
         if os.path.exists(logo_path):
             st.image(logo_path, width=150)
         else:
-            # Use emoji as fallback
             st.markdown("# ⚽ DYNAMIC FC")
         st.markdown(f"## {st.session_state.club}")
         st.markdown("---")
@@ -443,7 +442,6 @@ def navigation():
             if st.button("Logout"):
                 logout()
 
-            # Navigation menu (role-based)
             menu_items = ["Dashboard", "Player Registration", "Finance", "Training",
                           "Transfer Window", "Health & Performance", "Investors",
                           "AI Assistant"]
@@ -452,13 +450,11 @@ def navigation():
             choice = st.radio("Go to", menu_items)
 
             st.markdown("---")
-            # Multi-club support (only for superadmin/admins)
             if st.session_state.role in ['superadmin', 'admin']:
                 clubs = ["Dynamic FC (Falaba District)", "Dynamic FC Youth", "Dynamic FC Women"]
                 selected_club = st.selectbox("Switch Club", clubs, index=clubs.index(st.session_state.club) if st.session_state.club in clubs else 0)
                 if selected_club != st.session_state.club:
                     st.session_state.club = selected_club
-                    # Reload data for new club
                     st.session_state.players = _load_players()
                     st.session_state.finances = _load_finances()
                     st.session_state.investors = _load_investors()
@@ -468,13 +464,12 @@ def navigation():
             return choice
 
 # ------------------------------
-# Page content functions
+# 6. PAGE CONTENT FUNCTIONS
 # ------------------------------
 def dashboard_page():
     st.title("📊 Dashboard")
     st.markdown(f"### Welcome to {st.session_state.club}")
 
-    # Key metrics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Players", len(st.session_state.players))
@@ -488,7 +483,6 @@ def dashboard_page():
     with col4:
         st.metric("Investors", len(st.session_state.investors))
 
-    # Financial chart
     st.subheader("📈 Financial Overview")
     if st.session_state.finances:
         df_fin = pd.DataFrame(st.session_state.finances)
@@ -497,7 +491,6 @@ def dashboard_page():
     else:
         st.info("No financial data yet.")
 
-    # Player performance scores (mock AI)
     st.subheader("🧠 Player Performance Scores (AI Generated)")
     if st.session_state.players:
         player_names = [p['name'] for p in st.session_state.players]
@@ -508,7 +501,6 @@ def dashboard_page():
     else:
         st.info("Register players to see performance scores.")
 
-    # Auto profit summary (last 30 days)
     st.subheader("📉 Auto Profit Summary (Last 30 Days)")
     today = datetime.date.today()
     month_ago = today - datetime.timedelta(days=30)
@@ -522,7 +514,6 @@ def player_registration_page():
     st.title("📝 Player Registration")
     st.markdown("Add, edit, or remove players from the squad.")
 
-    # Tabs for add/edit/delete
     tab1, tab2, tab3 = st.tabs(["➕ Add Player", "✏️ Edit Player", "❌ Remove Player"])
 
     with tab1:
@@ -538,7 +529,6 @@ def player_registration_page():
                 contract = st.date_input("Contract Until")
                 salary = st.number_input("Monthly Salary ($)", min_value=0.0, step=100.0)
                 photo = st.file_uploader("Upload Player Photo", type=['png', 'jpg', 'jpeg'])
-
             submitted = st.form_submit_button("Register Player")
             if submitted:
                 try:
@@ -619,7 +609,6 @@ def player_registration_page():
         else:
             st.info("No players to remove.")
 
-    # Display current squad
     st.subheader("Current Squad")
     if st.session_state.players:
         for player in st.session_state.players:
@@ -642,7 +631,6 @@ def player_registration_page():
 def finance_page():
     st.title("💰 Finance Management")
     st.markdown("### Detailed Income & Expenditure")
-    st.markdown("Categories include: Ticket Sales, Merchandise, Sponsorship, Transfer Fee, Transportation, Feeding, Lodging, Salaries, Bonuses, etc.")
 
     tab1, tab2, tab3 = st.tabs(["➕ Add Transaction", "📋 View Records", "📊 Profit Summary"])
 
@@ -672,7 +660,8 @@ def finance_page():
                     st.success("Transaction added!")
                     if FPDF_AVAILABLE:
                         pdf_bytes = generate_pdf_receipt(fin_data)
-                        download_pdf_button(pdf_bytes, f"receipt_{date}.pdf")
+                        if pdf_bytes:
+                            download_pdf_button(pdf_bytes, f"receipt_{date}.pdf")
                 except Exception as e:
                     st.error(f"Error: {e}")
 
@@ -710,12 +699,10 @@ def finance_page():
 def training_page():
     st.title("🏋️ Training & Video Integration")
     st.subheader("Cone Training Drills")
-    # Embed a sample YouTube video (replace with actual team video)
-    video_url = "https://www.youtube.com/embed/dQw4w9WgXcQ"  # Placeholder
+    video_url = "https://www.youtube.com/embed/dQw4w9WgXcQ"  # Replace with actual team video
     st.markdown(f'<iframe width="560" height="315" src="{video_url}" frameborder="0" allowfullscreen></iframe>', unsafe_allow_html=True)
 
     st.subheader("Performance Tracking")
-    # Training log form
     with st.form("training_log"):
         if st.session_state.players:
             player_names = [p['name'] for p in st.session_state.players]
@@ -739,7 +726,6 @@ def training_page():
             except Exception as e:
                 st.error(f"Error: {e}")
 
-    # Display recent logs
     if st.session_state.training_logs:
         st.subheader("Recent Training Logs")
         df_logs = pd.DataFrame(st.session_state.training_logs[-10:])
@@ -849,7 +835,6 @@ def health_performance_page():
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-        # Display current health status
         st.subheader("Current Health Status")
         if st.session_state.health_records:
             df_health = pd.DataFrame(st.session_state.health_records)
@@ -1022,7 +1007,6 @@ def admin_panel_page():
         if CRYPTO_AVAILABLE:
             st.success("Encryption module is available. Sensitive data can be encrypted at rest.")
             if st.button("Encrypt Database (Simulated)"):
-                # In a real app, you would encrypt the entire DB file or specific columns
                 st.info("Database encryption simulation: All sensitive fields would be encrypted.")
         else:
             st.warning("Cryptography library not installed. Install with: pip install cryptography")
@@ -1030,7 +1014,6 @@ def admin_panel_page():
         st.subheader("Database Backup (Cloud Sync Simulation)")
         if st.button("💾 Backup to Cloud"):
             try:
-                # Simulate cloud backup by copying the database file
                 import shutil
                 backup_name = f"backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
                 shutil.copy('dynamic_fc.db', backup_name)
@@ -1049,20 +1032,18 @@ def admin_panel_page():
         """)
 
 # ------------------------------
-# Main app logic
+# 7. MAIN APP LOGIC
 # ------------------------------
 def main():
     try:
         choice = navigation()
         if choice is None:
-            # Not logged in, show welcome page
             st.title("⚽ Welcome to Dynamic FC Management System")
             st.markdown("### Falaba District's Premier Football Club Management Software")
             st.image("https://via.placeholder.com/800x200?text=Dynamic+FC+Falaba+District", use_container_width=True)
             st.markdown("Please log in using the sidebar to access the dashboard.")
             return
 
-        # Route to selected page
         if choice == "Dashboard":
             dashboard_page()
         elif choice == "Player Registration":

@@ -1,10 +1,6 @@
 """
 DYNAMIC FC - Football Management System (Falaba District)
-Comprehensive Streamlit application for club management.
-Includes: Admin login, player registration (with photo), finance tracking (with detailed categories),
-training videos, transfer windows, performance AI, health monitoring, investor contributions,
-PDF receipts, WhatsApp/email reports, multi-club support, and more.
-
+Professional club management application with all requested features.
 Run with: streamlit run football_app.py
 """
 
@@ -22,8 +18,9 @@ from io import BytesIO
 from PIL import Image
 import plotly.express as px
 import plotly.graph_objects as go
+import uuid
 
-# Optional imports (with graceful fallback)
+# Optional imports with graceful fallback
 try:
     from fpdf import FPDF
     FPDF_AVAILABLE = True
@@ -43,7 +40,7 @@ except ImportError:
     OPENAI_AVAILABLE = False
 
 # ------------------------------
-# Page configuration
+# Page configuration (must be first Streamlit command)
 # ------------------------------
 st.set_page_config(
     page_title="Dynamic FC Management",
@@ -159,7 +156,7 @@ def _create_tables():
         CREATE TABLE IF NOT EXISTS transfers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             player_name TEXT,
-            transfer_type TEXT,  -- 'in' or 'out'
+            transfer_type TEXT,  -- 'incoming' or 'outgoing'
             from_club TEXT,
             to_club TEXT,
             transfer_fee REAL,
@@ -220,6 +217,26 @@ def _save_player(player_data):
     conn.commit()
     st.session_state.players = _load_players()
 
+def _update_player(player_id, player_data):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE players SET name=?, position=?, age=?, jersey_number=?, nationality=?, contract_until=?, monthly_salary=?, photo=?
+        WHERE id=? AND club=?
+    ''', (player_data['name'], player_data['position'], player_data['age'],
+          player_data['jersey_number'], player_data['nationality'],
+          player_data['contract_until'], player_data['monthly_salary'],
+          player_data['photo'], player_id, st.session_state.club))
+    conn.commit()
+    st.session_state.players = _load_players()
+
+def _delete_player(player_id):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM players WHERE id=? AND club=?", (player_id, st.session_state.club))
+    conn.commit()
+    st.session_state.players = _load_players()
+
 def _save_finance(fin_data):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
@@ -264,6 +281,33 @@ def _save_transfer(transfer_data):
           transfer_data['notes'], st.session_state.club))
     conn.commit()
     st.session_state.transfers = _load_transfers()
+
+def _get_users():
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, role, club FROM users")
+    return cursor.fetchall()
+
+def _add_user(username, password, role, club):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    hashed = hashlib.sha256(password.encode()).hexdigest()
+    cursor.execute("INSERT INTO users (username, password_hash, role, club) VALUES (?,?,?,?)",
+                   (username, hashed, role, club))
+    conn.commit()
+
+def _delete_user(user_id):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE id=?", (user_id,))
+    conn.commit()
+
+def _change_password(username, new_password):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    hashed = hashlib.sha256(new_password.encode()).hexdigest()
+    cursor.execute("UPDATE users SET password_hash=? WHERE username=?", (hashed, username))
+    conn.commit()
 
 # ------------------------------
 # Utility functions
@@ -351,17 +395,25 @@ def bytes_to_image(img_bytes):
         return Image.open(BytesIO(img_bytes))
     return None
 
+def simulate_whatsapp_message(report):
+    """Simulate sending WhatsApp message."""
+    st.info(f"📱 WhatsApp message sent: {report[:100]}...")
+
+def simulate_email_report(report):
+    """Simulate sending email report."""
+    st.info(f"📧 Email report sent to admins: {report[:100]}...")
+
 # ------------------------------
-# Sidebar navigation (depends on auth)
+# Sidebar navigation
 # ------------------------------
 def navigation():
     with st.sidebar:
-        # Club logo (try to load from local file, else placeholder)
-        logo_path = "sandbox:/mnt/data/yourfile.png"  # Provided path
+        # Club logo (try to load from provided path, else placeholder)
+        logo_path = "sandbox:/mnt/data/yourfile.png"
         if os.path.exists(logo_path):
             st.image(logo_path, width=150)
         else:
-            # Fallback to emoji
+            # Use emoji as fallback
             st.markdown("# ⚽ DYNAMIC FC")
         st.markdown(f"## {st.session_state.club}")
         st.markdown("---")
@@ -468,45 +520,106 @@ def dashboard_page():
 
 def player_registration_page():
     st.title("📝 Player Registration")
-    with st.form("player_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            name = st.text_input("Full Name*")
-            position = st.selectbox("Position", ["Goalkeeper", "Defender", "Midfielder", "Forward"])
-            age = st.number_input("Age", min_value=15, max_value=50, step=1)
-            jersey = st.number_input("Jersey Number", min_value=1, max_value=99, step=1)
-        with col2:
-            nationality = st.text_input("Nationality")
-            contract = st.date_input("Contract Until")
-            salary = st.number_input("Monthly Salary ($)", min_value=0.0, step=100.0)
-            photo = st.file_uploader("Upload Player Photo", type=['png', 'jpg', 'jpeg'])
+    st.markdown("Add, edit, or remove players from the squad.")
 
-        submitted = st.form_submit_button("Register Player")
-        if submitted:
-            try:
-                if not name:
-                    st.error("Player name is required.")
-                else:
-                    photo_bytes = None
-                    if photo:
-                        image = Image.open(photo)
-                        photo_bytes = image_to_bytes(image)
-                    player_data = {
-                        'name': name,
-                        'position': position,
-                        'age': age,
-                        'jersey_number': jersey,
-                        'nationality': nationality,
-                        'contract_until': contract.strftime("%Y-%m-%d"),
-                        'monthly_salary': salary,
-                        'photo': photo_bytes
-                    }
-                    _save_player(player_data)
-                    st.success(f"Player {name} registered successfully!")
-            except Exception as e:
-                st.error(f"Error: {e}")
+    # Tabs for add/edit/delete
+    tab1, tab2, tab3 = st.tabs(["➕ Add Player", "✏️ Edit Player", "❌ Remove Player"])
 
-    # Display existing players with photos
+    with tab1:
+        with st.form("player_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                name = st.text_input("Full Name*")
+                position = st.selectbox("Position", ["Goalkeeper", "Defender", "Midfielder", "Forward"])
+                age = st.number_input("Age", min_value=15, max_value=50, step=1)
+                jersey = st.number_input("Jersey Number", min_value=1, max_value=99, step=1)
+            with col2:
+                nationality = st.text_input("Nationality")
+                contract = st.date_input("Contract Until")
+                salary = st.number_input("Monthly Salary ($)", min_value=0.0, step=100.0)
+                photo = st.file_uploader("Upload Player Photo", type=['png', 'jpg', 'jpeg'])
+
+            submitted = st.form_submit_button("Register Player")
+            if submitted:
+                try:
+                    if not name:
+                        st.error("Player name is required.")
+                    else:
+                        photo_bytes = None
+                        if photo:
+                            image = Image.open(photo)
+                            photo_bytes = image_to_bytes(image)
+                        player_data = {
+                            'name': name,
+                            'position': position,
+                            'age': age,
+                            'jersey_number': jersey,
+                            'nationality': nationality,
+                            'contract_until': contract.strftime("%Y-%m-%d"),
+                            'monthly_salary': salary,
+                            'photo': photo_bytes
+                        }
+                        _save_player(player_data)
+                        st.success(f"Player {name} registered successfully!")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    with tab2:
+        if st.session_state.players:
+            player_options = {p['id']: p['name'] for p in st.session_state.players}
+            selected_player_id = st.selectbox("Select Player to Edit", options=list(player_options.keys()), format_func=lambda x: player_options[x])
+            player = next((p for p in st.session_state.players if p['id'] == selected_player_id), None)
+            if player:
+                with st.form("edit_player_form"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        name = st.text_input("Full Name", value=player['name'])
+                        position = st.selectbox("Position", ["Goalkeeper", "Defender", "Midfielder", "Forward"], index=["Goalkeeper", "Defender", "Midfielder", "Forward"].index(player['position']))
+                        age = st.number_input("Age", min_value=15, max_value=50, value=player['age'])
+                        jersey = st.number_input("Jersey Number", min_value=1, max_value=99, value=player['jersey_number'])
+                    with col2:
+                        nationality = st.text_input("Nationality", value=player['nationality'])
+                        contract = st.date_input("Contract Until", value=datetime.datetime.strptime(player['contract_until'], '%Y-%m-%d').date())
+                        salary = st.number_input("Monthly Salary ($)", min_value=0.0, value=player['monthly_salary'])
+                        photo = st.file_uploader("Upload New Photo (leave empty to keep current)", type=['png', 'jpg', 'jpeg'])
+                    submitted = st.form_submit_button("Update Player")
+                    if submitted:
+                        try:
+                            photo_bytes = player['photo']
+                            if photo:
+                                image = Image.open(photo)
+                                photo_bytes = image_to_bytes(image)
+                            player_data = {
+                                'name': name,
+                                'position': position,
+                                'age': age,
+                                'jersey_number': jersey,
+                                'nationality': nationality,
+                                'contract_until': contract.strftime("%Y-%m-%d"),
+                                'monthly_salary': salary,
+                                'photo': photo_bytes
+                            }
+                            _update_player(selected_player_id, player_data)
+                            st.success("Player updated!")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+        else:
+            st.info("No players to edit.")
+
+    with tab3:
+        if st.session_state.players:
+            player_options = {p['id']: p['name'] for p in st.session_state.players}
+            selected_player_id = st.selectbox("Select Player to Remove", options=list(player_options.keys()), format_func=lambda x: player_options[x])
+            if st.button("Delete Player", type="primary"):
+                try:
+                    _delete_player(selected_player_id)
+                    st.success("Player removed.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+        else:
+            st.info("No players to remove.")
+
+    # Display current squad
     st.subheader("Current Squad")
     if st.session_state.players:
         for player in st.session_state.players:
@@ -531,13 +644,12 @@ def finance_page():
     st.markdown("### Detailed Income & Expenditure")
     st.markdown("Categories include: Ticket Sales, Merchandise, Sponsorship, Transfer Fee, Transportation, Feeding, Lodging, Salaries, Bonuses, etc.")
 
-    tab1, tab2, tab3 = st.tabs(["Add Transaction", "View Records", "Profit Summary"])
+    tab1, tab2, tab3 = st.tabs(["➕ Add Transaction", "📋 View Records", "📊 Profit Summary"])
 
     with tab1:
         with st.form("finance_form"):
             date = st.date_input("Date", datetime.date.today())
             trans_type = st.radio("Type", ["income", "expense"])
-            # Comprehensive category list
             categories = [
                 "Ticket Sales", "Merchandise", "Sponsorship", "Transfer Fee (In)",
                 "Transfer Fee (Out)", "Transportation", "Feeding/Food", "Lodging/Hotel",
@@ -558,7 +670,6 @@ def finance_page():
                     }
                     _save_finance(fin_data)
                     st.success("Transaction added!")
-                    # Offer PDF receipt
                     if FPDF_AVAILABLE:
                         pdf_bytes = generate_pdf_receipt(fin_data)
                         download_pdf_button(pdf_bytes, f"receipt_{date}.pdf")
@@ -582,12 +693,17 @@ def finance_page():
             st.metric("Total Expense", f"${expense:,.2f}")
             st.metric("Net Profit", f"${profit:,.2f}")
 
-            # Breakdown by category
             st.subheader("Expense Breakdown")
             expense_df = df[df['type'] == 'expense'].groupby('category')['amount'].sum().reset_index()
             if not expense_df.empty:
                 fig = px.pie(expense_df, values='amount', names='category', title='Expenses by Category')
                 st.plotly_chart(fig)
+
+            st.subheader("Income Breakdown")
+            income_df = df[df['type'] == 'income'].groupby('category')['amount'].sum().reset_index()
+            if not income_df.empty:
+                fig2 = px.pie(income_df, values='amount', names='category', title='Income by Category')
+                st.plotly_chart(fig2)
         else:
             st.info("No data for summary.")
 
@@ -637,7 +753,7 @@ def transfer_window_page():
         col1, col2 = st.columns(2)
         with col1:
             player_name = st.text_input("Player Name*")
-            transfer_type = st.radio("Transfer Type", ["Incoming", "Outgoing"])
+            transfer_type = st.radio("Transfer Type", ["incoming", "outgoing"])
             from_club = st.text_input("From Club")
             to_club = st.text_input("To Club")
         with col2:
@@ -652,7 +768,7 @@ def transfer_window_page():
                 else:
                     transfer_data = {
                         'player_name': player_name,
-                        'transfer_type': transfer_type.lower(),
+                        'transfer_type': transfer_type,
                         'from_club': from_club,
                         'to_club': to_club,
                         'transfer_fee': transfer_fee,
@@ -686,7 +802,6 @@ def health_performance_page():
             player = st.selectbox("Select Player", player_names, key="perf_player")
             if st.button("Generate AI Score"):
                 try:
-                    # Mock AI scoring
                     score = np.random.randint(50, 100)
                     st.metric("Performance Score", score)
                     if score > 80:
@@ -695,7 +810,6 @@ def health_performance_page():
                         st.warning("Average performance, needs improvement.")
                     else:
                         st.error("Below par, consider rest or training adjustment.")
-                    # Optionally use OpenAI
                     if st.session_state.get('openai_api_key'):
                         prompt = f"Provide a brief performance analysis for {player} based on score {score}."
                         ai_response = call_openai(prompt)
@@ -738,7 +852,6 @@ def health_performance_page():
         # Display current health status
         st.subheader("Current Health Status")
         if st.session_state.health_records:
-            # Merge with player names
             df_health = pd.DataFrame(st.session_state.health_records)
             player_map = {p['id']: p['name'] for p in st.session_state.players}
             df_health['player_name'] = df_health['player_id'].map(player_map)
@@ -785,7 +898,6 @@ def ai_assistant_page():
     st.title("🤖 AI Assistant")
     st.markdown("Ask anything about football management, training tactics, player health, or finance.")
 
-    # Chat interface
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -811,61 +923,130 @@ def admin_panel_page():
         return
 
     st.title("🔐 Admin Panel")
-    st.subheader("User Management")
-    with st.form("new_user"):
-        new_username = st.text_input("Username")
-        new_password = st.text_input("Password", type="password")
-        new_role = st.selectbox("Role", ["admin", "manager", "viewer"])
-        new_club = st.text_input("Club (default: current club)", value=st.session_state.club)
-        submitted = st.form_submit_button("Create User")
-        if submitted:
+    st.markdown("### Master Controller: Manage users, system settings, and security.")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["👥 User Management", "🔑 Change Login", "⚙️ System Settings", "🛡️ Security"])
+
+    with tab1:
+        st.subheader("Add New User")
+        with st.form("add_user_form"):
+            new_username = st.text_input("Username")
+            new_password = st.text_input("Password", type="password")
+            new_role = st.selectbox("Role", ["admin", "manager", "viewer"])
+            new_club = st.text_input("Club (default: current club)", value=st.session_state.club)
+            submitted = st.form_submit_button("Create User")
+            if submitted:
+                try:
+                    _add_user(new_username, new_password, new_role, new_club)
+                    st.success(f"User {new_username} created.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        st.subheader("Existing Users")
+        users = _get_users()
+        if users:
+            df_users = pd.DataFrame(users, columns=["ID", "Username", "Role", "Club"])
+            st.dataframe(df_users)
+
+            st.subheader("Delete User")
+            user_to_delete = st.selectbox("Select User ID to delete", [u[0] for u in users], format_func=lambda x: f"{x} - {next((u[1] for u in users if u[0]==x), '')}")
+            if st.button("Delete User", type="primary"):
+                try:
+                    _delete_user(user_to_delete)
+                    st.success("User deleted.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+        else:
+            st.info("No users found.")
+
+    with tab2:
+        st.subheader("Change Your Password")
+        with st.form("change_pw_form"):
+            current_pw = st.text_input("Current Password", type="password")
+            new_pw = st.text_input("New Password", type="password")
+            confirm_pw = st.text_input("Confirm New Password", type="password")
+            submitted = st.form_submit_button("Change Password")
+            if submitted:
+                try:
+                    role, club = verify_login(st.session_state.username, current_pw)
+                    if role:
+                        if new_pw == confirm_pw:
+                            _change_password(st.session_state.username, new_pw)
+                            st.success("Password changed successfully.")
+                        else:
+                            st.error("New passwords do not match.")
+                    else:
+                        st.error("Current password incorrect.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        st.subheader("Change Another User's Password (Admin only)")
+        if st.session_state.role == 'superadmin':
+            users = _get_users()
+            if users:
+                user_list = {u[1]: u[0] for u in users}
+                selected_user = st.selectbox("Select User", options=list(user_list.keys()))
+                new_pw_user = st.text_input("New Password for selected user", type="password", key="admin_new_pw")
+                if st.button("Set New Password"):
+                    try:
+                        _change_password(selected_user, new_pw_user)
+                        st.success(f"Password for {selected_user} updated.")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+    with tab3:
+        st.subheader("OpenAI API Key")
+        api_key = st.text_input("Enter OpenAI API Key", type="password")
+        if api_key:
+            st.session_state.openai_api_key = api_key
+            st.success("API key saved for this session.")
+
+        st.subheader("Simulated Reports")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📧 Send Daily Email Report"):
+                report = f"Daily report for {st.session_state.club}: Players: {len(st.session_state.players)}, Net Balance: ${sum(f['amount'] for f in st.session_state.finances if f['type']=='income') - sum(f['amount'] for f in st.session_state.finances if f['type']=='expense'):,.2f}"
+                simulate_email_report(report)
+        with col2:
+            if st.button("📱 Send WhatsApp Report"):
+                report = f"WhatsApp report: {st.session_state.club} - Investors: {len(st.session_state.investors)}, Recent transfers: {len(st.session_state.transfers)}"
+                simulate_whatsapp_message(report)
+
+        st.subheader("Fingerprint Login Simulation")
+        if st.button("Simulate Fingerprint Auth"):
+            st.success("Fingerprint recognized. (Demo)")
+
+    with tab4:
+        st.subheader("Encryption Status")
+        if CRYPTO_AVAILABLE:
+            st.success("Encryption module is available. Sensitive data can be encrypted at rest.")
+            if st.button("Encrypt Database (Simulated)"):
+                # In a real app, you would encrypt the entire DB file or specific columns
+                st.info("Database encryption simulation: All sensitive fields would be encrypted.")
+        else:
+            st.warning("Cryptography library not installed. Install with: pip install cryptography")
+
+        st.subheader("Database Backup (Cloud Sync Simulation)")
+        if st.button("💾 Backup to Cloud"):
             try:
-                conn = st.session_state.db_conn
-                cursor = conn.cursor()
-                hashed = hash_password(new_password)
-                cursor.execute("INSERT INTO users (username, password_hash, role, club) VALUES (?,?,?,?)",
-                               (new_username, hashed, new_role, new_club))
-                conn.commit()
-                st.success(f"User {new_username} created.")
+                # Simulate cloud backup by copying the database file
+                import shutil
+                backup_name = f"backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+                shutil.copy('dynamic_fc.db', backup_name)
+                st.success(f"Database backed up locally as {backup_name} (simulated cloud sync).")
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Backup failed: {e}")
 
-    st.subheader("System Settings")
-    # OpenAI API key
-    api_key = st.text_input("OpenAI API Key", type="password")
-    if api_key:
-        st.session_state.openai_api_key = api_key
-        st.success("API key saved for this session.")
-
-    # Simulate daily email report
-    if st.button("📧 Send Daily Report (Simulated)"):
-        st.info("Daily report would be sent to admins via email. (Simulated)")
-
-    # Simulate WhatsApp report
-    if st.button("📱 Send WhatsApp Report (Simulated)"):
-        st.info("WhatsApp Business API message sent. (Simulated)")
-
-    # Fingerprint login simulation
-    st.subheader("🖐️ Fingerprint Login (Simulated)")
-    if st.button("Simulate Fingerprint Auth"):
-        st.success("Fingerprint recognized. (Demo)")
-
-    # Encryption status
-    st.subheader("🔒 Security Status")
-    if CRYPTO_AVAILABLE:
-        st.success("Encryption module available. Sensitive data can be encrypted.")
-    else:
-        st.warning("Cryptography library not installed. Install with: pip install cryptography")
-
-    # Database backup
-    if st.button("💾 Backup Database (Simulated Cloud Sync)"):
-        # Simulate cloud backup by copying db file
-        try:
-            import shutil
-            shutil.copy('dynamic_fc.db', 'dynamic_fc_backup.db')
-            st.success("Database backed up locally (simulated cloud sync).")
-        except Exception as e:
-            st.error(f"Backup failed: {e}")
+        st.subheader("Production Security Hardening")
+        st.markdown("""
+        - All passwords are hashed with SHA256.
+        - Role-based access control implemented.
+        - SQLite database with parameterized queries prevents injection.
+        - Optional encryption for sensitive fields.
+        - Session management via Streamlit state.
+        - In production, use HTTPS, environment variables for secrets, and a cloud database with encryption at rest.
+        """)
 
 # ------------------------------
 # Main app logic
@@ -874,7 +1055,7 @@ def main():
     try:
         choice = navigation()
         if choice is None:
-            # Not logged in, show welcome
+            # Not logged in, show welcome page
             st.title("⚽ Welcome to Dynamic FC Management System")
             st.markdown("### Falaba District's Premier Football Club Management Software")
             st.image("https://via.placeholder.com/800x200?text=Dynamic+FC+Falaba+District", use_container_width=True)

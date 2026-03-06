@@ -1,6 +1,6 @@
 """
 DYNAMIC FC - Football Management System (Falaba District)
-Professional club management application with all requested features.
+Professional club management application with all requested features including tournament registration.
 Run with: streamlit run football_app.py
 """
 
@@ -136,6 +136,19 @@ def _create_tables():
             club TEXT
         )
     ''')
+    # Tournaments table (NEW)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tournaments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tournament_name TEXT,
+            season TEXT,
+            registration_date TEXT,
+            team_category TEXT,  -- 'Premier League', 'Division One', 'Division Two', 'Under 12', 'Under 14'
+            status TEXT,  -- 'registered', 'ongoing', 'completed'
+            notes TEXT,
+            club TEXT
+        )
+    ''')
     conn.commit()
 
 def _ensure_schema():
@@ -156,11 +169,10 @@ def _ensure_schema():
                 pass
 
     # Add club column to all tables that might be missing it (legacy tables)
-    for table in ['players', 'finances', 'investors', 'health', 'transfers']:
+    for table in ['players', 'finances', 'investors', 'health', 'transfers', 'tournaments']:
         add_column_if_not_exists(table, 'club', 'TEXT')
     
     # Add any other missing columns (optional, for completeness)
-    # Players table
     add_column_if_not_exists('players', 'photo', 'BLOB')
     add_column_if_not_exists('players', 'monthly_salary', 'REAL')
     # etc.
@@ -172,7 +184,6 @@ def _load_players():
         df = pd.read_sql("SELECT * FROM players WHERE club=?", conn, params=(club,))
         return df.to_dict('records') if not df.empty else []
     except Exception as e:
-        # If error occurs (e.g., missing table/column), return empty list
         st.error(f"Error loading players: {e}")
         return []
 
@@ -214,6 +225,16 @@ def _load_transfers():
         return df.to_dict('records') if not df.empty else []
     except Exception as e:
         st.error(f"Error loading transfers: {e}")
+        return []
+
+def _load_tournaments():
+    try:
+        conn = st.session_state.db_conn
+        club = st.session_state.club
+        df = pd.read_sql("SELECT * FROM tournaments WHERE club=?", conn, params=(club,))
+        return df.to_dict('records') if not df.empty else []
+    except Exception as e:
+        st.error(f"Error loading tournaments: {e}")
         return []
 
 def _save_player(player_data):
@@ -293,6 +314,18 @@ def _save_transfer(transfer_data):
           transfer_data['notes'], st.session_state.club))
     conn.commit()
     st.session_state.transfers = _load_transfers()
+
+def _save_tournament(tournament_data):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO tournaments (tournament_name, season, registration_date, team_category, status, notes, club)
+        VALUES (?,?,?,?,?,?,?)
+    ''', (tournament_data['tournament_name'], tournament_data['season'],
+          tournament_data['registration_date'], tournament_data['team_category'],
+          tournament_data['status'], tournament_data['notes'], st.session_state.club))
+    conn.commit()
+    st.session_state.tournaments = _load_tournaments()
 
 def _get_users():
     conn = st.session_state.db_conn
@@ -437,6 +470,8 @@ if 'health_records' not in st.session_state:
     st.session_state.health_records = _load_health()
 if 'transfers' not in st.session_state:
     st.session_state.transfers = _load_transfers()
+if 'tournaments' not in st.session_state:
+    st.session_state.tournaments = _load_tournaments()
 if 'training_logs' not in st.session_state:
     st.session_state.training_logs = []
 if 'messages' not in st.session_state:
@@ -463,11 +498,15 @@ except Exception as e:
 # ------------------------------
 def navigation():
     with st.sidebar:
-        # Club logo (try to load from provided path, else placeholder)
-        logo_path = "sandbox:/mnt/data/yourfile.png"
-        if os.path.exists(logo_path):
-            st.image(logo_path, width=150)
-        else:
+        # Try multiple possible logo paths
+        logo_paths = ["sandbox:/mnt/data/yourfile.png", "Icon.png", "logo.png", "static/logo.png"]
+        logo_displayed = False
+        for path in logo_paths:
+            if os.path.exists(path):
+                st.image(path, width=150)
+                logo_displayed = True
+                break
+        if not logo_displayed:
             st.markdown("# ⚽ DYNAMIC FC")
         st.markdown(f"## {st.session_state.club}")
         st.markdown("---")
@@ -499,7 +538,7 @@ def navigation():
 
             menu_items = ["Dashboard", "Player Registration", "Finance", "Training",
                           "Transfer Window", "Health & Performance", "Investors",
-                          "AI Assistant"]
+                          "Tournament Registration", "AI Assistant"]  # Added Tournament
             if st.session_state.role in ['superadmin', 'admin']:
                 menu_items.append("Admin Panel")
             choice = st.radio("Go to", menu_items)
@@ -515,6 +554,7 @@ def navigation():
                     st.session_state.investors = _load_investors()
                     st.session_state.health_records = _load_health()
                     st.session_state.transfers = _load_transfers()
+                    st.session_state.tournaments = _load_tournaments()
                     st.rerun()
             return choice
 
@@ -564,6 +604,14 @@ def dashboard_page():
     exp = sum(f['amount'] for f in recent if f['type'] == 'expense')
     profit = inc - exp
     st.write(f"Income: **${inc:,.2f}** | Expense: **${exp:,.2f}** | **Profit: ${profit:,.2f}**")
+
+    # Tournament participation summary
+    st.subheader("🏆 Tournament Participation")
+    if st.session_state.tournaments:
+        df_tourn = pd.DataFrame(st.session_state.tournaments)
+        st.dataframe(df_tourn[['tournament_name', 'season', 'team_category', 'status']])
+    else:
+        st.info("No tournament registrations yet.")
 
 def player_registration_page():
     st.title("📝 Player Registration")
@@ -754,7 +802,8 @@ def finance_page():
 def training_page():
     st.title("🏋️ Training & Video Integration")
     st.subheader("Cone Training Drills")
-    video_url = "https://www.youtube.com/embed/dQw4w9WgXcQ"  # Replace with actual team video
+    # Embed a football training video (replace with actual team video)
+    video_url = "https://www.youtube.com/embed/3VqJp2oU8YE"  # Example football training video
     st.markdown(f'<iframe width="560" height="315" src="{video_url}" frameborder="0" allowfullscreen></iframe>', unsafe_allow_html=True)
 
     st.subheader("Performance Tracking")
@@ -933,6 +982,47 @@ def investors_page():
         st.metric("Total Contributions", f"${total:,.2f}")
     else:
         st.info("No investors yet.")
+
+def tournament_page():
+    st.title("🏆 Tournament Registration")
+    st.markdown("Register your team for various Sierra Leone football tournaments.")
+
+    with st.form("tournament_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            tournament_name = st.text_input("Tournament Name*")
+            season = st.text_input("Season (e.g., 2025)")
+            registration_date = st.date_input("Registration Date", datetime.date.today())
+        with col2:
+            team_category = st.selectbox("Team Category", 
+                ["Premier League", "Division One", "Division Two", "Under 12", "Under 14"])
+            status = st.selectbox("Status", ["registered", "ongoing", "completed"])
+            notes = st.text_area("Notes")
+        submitted = st.form_submit_button("Register Tournament")
+        if submitted:
+            try:
+                if not tournament_name:
+                    st.error("Tournament name is required.")
+                else:
+                    tournament_data = {
+                        'tournament_name': tournament_name,
+                        'season': season,
+                        'registration_date': registration_date.strftime("%Y-%m-%d"),
+                        'team_category': team_category,
+                        'status': status,
+                        'notes': notes
+                    }
+                    _save_tournament(tournament_data)
+                    st.success(f"Tournament {tournament_name} registered successfully!")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    st.subheader("Tournament Registrations")
+    if st.session_state.tournaments:
+        df = pd.DataFrame(st.session_state.tournaments)
+        st.dataframe(df)
+    else:
+        st.info("No tournaments registered yet.")
 
 def ai_assistant_page():
     st.title("🤖 AI Assistant")
@@ -1113,6 +1203,8 @@ def main():
             health_performance_page()
         elif choice == "Investors":
             investors_page()
+        elif choice == "Tournament Registration":
+            tournament_page()
         elif choice == "AI Assistant":
             ai_assistant_page()
         elif choice == "Admin Panel":

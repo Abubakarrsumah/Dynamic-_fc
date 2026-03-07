@@ -1,6 +1,7 @@
 """
 DYNAMIC FC - Football Management System (Falaba District)
-Professional club management application with all requested features including tournament registration.
+Professional club management application with all requested features including tournament registration,
+match fixtures, formation library, lineup selection, and comprehensive financial controls.
 Run with: streamlit run football_app.py
 """
 
@@ -43,7 +44,7 @@ except ImportError:
     OPENAI_AVAILABLE = False
 
 # ------------------------------
-# 2. PAGE CONFIGURATION (must be first Streamlit command)
+# 2. PAGE CONFIGURATION
 # ------------------------------
 st.set_page_config(
     page_title="Dynamic FC Management",
@@ -53,15 +54,13 @@ st.set_page_config(
 )
 
 # ------------------------------
-# 3. HELPER FUNCTIONS (defined before use)
+# 3. DATABASE FUNCTIONS
 # ------------------------------
-
-# Database helper functions
 def _create_tables():
-    """Create necessary tables if they don't exist."""
+    """Create all necessary tables."""
     conn = st.session_state.db_conn
     cursor = conn.cursor()
-    # Users table (admin)
+    # Users
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +70,7 @@ def _create_tables():
             club TEXT
         )
     ''')
-    # Players table (with photo BLOB)
+    # Players
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS players (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,19 +85,19 @@ def _create_tables():
             club TEXT
         )
     ''')
-    # Finances table (income/expense) with detailed categories
+    # Finances
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS finances (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT,
-            type TEXT,  -- 'income' or 'expense'
+            type TEXT,
             category TEXT,
             amount REAL,
             description TEXT,
             club TEXT
         )
     ''')
-    # Investors table
+    # Investors
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS investors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,25 +108,25 @@ def _create_tables():
             club TEXT
         )
     ''')
-    # Health records
+    # Health
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS health (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             player_id INTEGER,
             date TEXT,
-            status TEXT,  -- 'fit', 'injured', 'recovering'
+            status TEXT,
             injury_type TEXT,
             expected_return TEXT,
             notes TEXT,
             club TEXT
         )
     ''')
-    # Transfers (in/out)
+    # Transfers
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS transfers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             player_name TEXT,
-            transfer_type TEXT,  -- 'incoming' or 'outgoing'
+            transfer_type TEXT,
             from_club TEXT,
             to_club TEXT,
             transfer_fee REAL,
@@ -136,27 +135,55 @@ def _create_tables():
             club TEXT
         )
     ''')
-    # Tournaments table (NEW)
+    # Tournaments
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tournaments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tournament_name TEXT,
             season TEXT,
             registration_date TEXT,
-            team_category TEXT,  -- 'Premier League', 'Division One', 'Division Two', 'Under 12', 'Under 14'
-            status TEXT,  -- 'registered', 'ongoing', 'completed'
+            team_category TEXT,
+            status TEXT,
             notes TEXT,
+            club TEXT
+        )
+    ''')
+    # Matches
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS matches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tournament_id INTEGER,
+            opponent TEXT,
+            match_date TEXT,
+            match_time TEXT,
+            venue TEXT,
+            home_away TEXT,
+            our_score INTEGER DEFAULT 0,
+            opponent_score INTEGER DEFAULT 0,
+            is_played BOOLEAN DEFAULT 0,
+            result TEXT,
+            notes TEXT,
+            club TEXT
+        )
+    ''')
+    # Lineups (NEW)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS lineups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_id INTEGER,
+            player_id INTEGER,
+            position TEXT,
+            is_substitute BOOLEAN DEFAULT 0,
             club TEXT
         )
     ''')
     conn.commit()
 
 def _ensure_schema():
-    """Ensure all tables have the required columns (schema migration)."""
+    """Add missing columns to existing tables."""
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     
-    # Helper to add column if missing
     def add_column_if_not_exists(table, column, col_type):
         cursor.execute(f"PRAGMA table_info({table})")
         columns = [col[1] for col in cursor.fetchall()]
@@ -164,27 +191,26 @@ def _ensure_schema():
             try:
                 cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
                 conn.commit()
-            except Exception as e:
-                # Column might already exist or other error
+            except:
                 pass
 
-    # Add club column to all tables that might be missing it (legacy tables)
-    for table in ['players', 'finances', 'investors', 'health', 'transfers', 'tournaments']:
+    for table in ['players', 'finances', 'investors', 'health', 'transfers', 'tournaments', 'matches', 'lineups']:
         add_column_if_not_exists(table, 'club', 'TEXT')
-    
-    # Add any other missing columns (optional, for completeness)
     add_column_if_not_exists('players', 'photo', 'BLOB')
     add_column_if_not_exists('players', 'monthly_salary', 'REAL')
-    # etc.
+    add_column_if_not_exists('matches', 'our_score', 'INTEGER DEFAULT 0')
+    add_column_if_not_exists('matches', 'opponent_score', 'INTEGER DEFAULT 0')
+    add_column_if_not_exists('matches', 'is_played', 'BOOLEAN DEFAULT 0')
+    add_column_if_not_exists('matches', 'result', 'TEXT')
 
+# Load functions
 def _load_players():
     try:
         conn = st.session_state.db_conn
         club = st.session_state.club
         df = pd.read_sql("SELECT * FROM players WHERE club=?", conn, params=(club,))
         return df.to_dict('records') if not df.empty else []
-    except Exception as e:
-        st.error(f"Error loading players: {e}")
+    except:
         return []
 
 def _load_finances():
@@ -193,8 +219,7 @@ def _load_finances():
         club = st.session_state.club
         df = pd.read_sql("SELECT * FROM finances WHERE club=?", conn, params=(club,))
         return df.to_dict('records') if not df.empty else []
-    except Exception as e:
-        st.error(f"Error loading finances: {e}")
+    except:
         return []
 
 def _load_investors():
@@ -203,8 +228,7 @@ def _load_investors():
         club = st.session_state.club
         df = pd.read_sql("SELECT * FROM investors WHERE club=?", conn, params=(club,))
         return df.to_dict('records') if not df.empty else []
-    except Exception as e:
-        st.error(f"Error loading investors: {e}")
+    except:
         return []
 
 def _load_health():
@@ -213,8 +237,7 @@ def _load_health():
         club = st.session_state.club
         df = pd.read_sql("SELECT * FROM health WHERE club=?", conn, params=(club,))
         return df.to_dict('records') if not df.empty else []
-    except Exception as e:
-        st.error(f"Error loading health records: {e}")
+    except:
         return []
 
 def _load_transfers():
@@ -223,8 +246,7 @@ def _load_transfers():
         club = st.session_state.club
         df = pd.read_sql("SELECT * FROM transfers WHERE club=?", conn, params=(club,))
         return df.to_dict('records') if not df.empty else []
-    except Exception as e:
-        st.error(f"Error loading transfers: {e}")
+    except:
         return []
 
 def _load_tournaments():
@@ -233,99 +255,171 @@ def _load_tournaments():
         club = st.session_state.club
         df = pd.read_sql("SELECT * FROM tournaments WHERE club=?", conn, params=(club,))
         return df.to_dict('records') if not df.empty else []
-    except Exception as e:
-        st.error(f"Error loading tournaments: {e}")
+    except:
         return []
 
-def _save_player(player_data):
+def _load_matches():
+    try:
+        conn = st.session_state.db_conn
+        club = st.session_state.club
+        df = pd.read_sql("SELECT * FROM matches WHERE club=?", conn, params=(club,))
+        return df.to_dict('records') if not df.empty else []
+    except:
+        return []
+
+def _load_lineups():
+    try:
+        conn = st.session_state.db_conn
+        club = st.session_state.club
+        df = pd.read_sql("SELECT * FROM lineups WHERE club=?", conn, params=(club,))
+        return df.to_dict('records') if not df.empty else []
+    except:
+        return []
+
+# Save functions
+def _save_player(data):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO players (name, position, age, jersey_number, nationality, contract_until, monthly_salary, photo, club)
         VALUES (?,?,?,?,?,?,?,?,?)
-    ''', (player_data['name'], player_data['position'], player_data['age'],
-          player_data['jersey_number'], player_data['nationality'],
-          player_data['contract_until'], player_data['monthly_salary'],
-          player_data['photo'], st.session_state.club))
+    ''', (data['name'], data['position'], data['age'], data['jersey_number'],
+          data['nationality'], data['contract_until'], data['monthly_salary'],
+          data['photo'], st.session_state.club))
     conn.commit()
     st.session_state.players = _load_players()
 
-def _update_player(player_id, player_data):
+def _update_player(pid, data):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     cursor.execute('''
         UPDATE players SET name=?, position=?, age=?, jersey_number=?, nationality=?, contract_until=?, monthly_salary=?, photo=?
         WHERE id=? AND club=?
-    ''', (player_data['name'], player_data['position'], player_data['age'],
-          player_data['jersey_number'], player_data['nationality'],
-          player_data['contract_until'], player_data['monthly_salary'],
-          player_data['photo'], player_id, st.session_state.club))
+    ''', (data['name'], data['position'], data['age'], data['jersey_number'],
+          data['nationality'], data['contract_until'], data['monthly_salary'],
+          data['photo'], pid, st.session_state.club))
     conn.commit()
     st.session_state.players = _load_players()
 
-def _delete_player(player_id):
+def _delete_player(pid):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM players WHERE id=? AND club=?", (player_id, st.session_state.club))
+    cursor.execute("DELETE FROM players WHERE id=? AND club=?", (pid, st.session_state.club))
     conn.commit()
     st.session_state.players = _load_players()
 
-def _save_finance(fin_data):
+def _save_finance(data):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO finances (date, type, category, amount, description, club)
         VALUES (?,?,?,?,?,?)
-    ''', (fin_data['date'], fin_data['type'], fin_data['category'],
-          fin_data['amount'], fin_data['description'], st.session_state.club))
+    ''', (data['date'], data['type'], data['category'], data['amount'], data['description'], st.session_state.club))
     conn.commit()
     st.session_state.finances = _load_finances()
 
-def _save_investor(inv_data):
+def _update_finance(fid, data):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE finances SET date=?, type=?, category=?, amount=?, description=?
+        WHERE id=? AND club=?
+    ''', (data['date'], data['type'], data['category'], data['amount'], data['description'], fid, st.session_state.club))
+    conn.commit()
+    st.session_state.finances = _load_finances()
+
+def _delete_finance(fid):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM finances WHERE id=? AND club=?", (fid, st.session_state.club))
+    conn.commit()
+    st.session_state.finances = _load_finances()
+
+def _save_investor(data):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO investors (name, contribution, date, notes, club)
         VALUES (?,?,?,?,?)
-    ''', (inv_data['name'], inv_data['contribution'], inv_data['date'], inv_data['notes'], st.session_state.club))
+    ''', (data['name'], data['contribution'], data['date'], data['notes'], st.session_state.club))
     conn.commit()
     st.session_state.investors = _load_investors()
 
-def _save_health(health_data):
+def _save_health(data):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO health (player_id, date, status, injury_type, expected_return, notes, club)
         VALUES (?,?,?,?,?,?,?)
-    ''', (health_data['player_id'], health_data['date'], health_data['status'],
-          health_data['injury_type'], health_data['expected_return'], health_data['notes'], st.session_state.club))
+    ''', (data['player_id'], data['date'], data['status'], data['injury_type'],
+          data['expected_return'], data['notes'], st.session_state.club))
     conn.commit()
     st.session_state.health_records = _load_health()
 
-def _save_transfer(transfer_data):
+def _save_transfer(data):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO transfers (player_name, transfer_type, from_club, to_club, transfer_fee, date, notes, club)
         VALUES (?,?,?,?,?,?,?,?)
-    ''', (transfer_data['player_name'], transfer_data['transfer_type'],
-          transfer_data['from_club'], transfer_data['to_club'],
-          transfer_data['transfer_fee'], transfer_data['date'],
-          transfer_data['notes'], st.session_state.club))
+    ''', (data['player_name'], data['transfer_type'], data['from_club'], data['to_club'],
+          data['transfer_fee'], data['date'], data['notes'], st.session_state.club))
     conn.commit()
     st.session_state.transfers = _load_transfers()
 
-def _save_tournament(tournament_data):
+def _save_tournament(data):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO tournaments (tournament_name, season, registration_date, team_category, status, notes, club)
         VALUES (?,?,?,?,?,?,?)
-    ''', (tournament_data['tournament_name'], tournament_data['season'],
-          tournament_data['registration_date'], tournament_data['team_category'],
-          tournament_data['status'], tournament_data['notes'], st.session_state.club))
+    ''', (data['tournament_name'], data['season'], data['registration_date'],
+          data['team_category'], data['status'], data['notes'], st.session_state.club))
     conn.commit()
     st.session_state.tournaments = _load_tournaments()
+
+def _save_match(data):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO matches (tournament_id, opponent, match_date, match_time, venue, home_away, notes, club)
+        VALUES (?,?,?,?,?,?,?,?)
+    ''', (data['tournament_id'], data['opponent'], data['match_date'],
+          data['match_time'], data['venue'], data['home_away'], data['notes'], st.session_state.club))
+    conn.commit()
+    st.session_state.matches = _load_matches()
+
+def _update_match_result(mid, our, opp, played, result):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE matches SET our_score=?, opponent_score=?, is_played=?, result=?
+        WHERE id=? AND club=?
+    ''', (our, opp, played, result, mid, st.session_state.club))
+    conn.commit()
+    st.session_state.matches = _load_matches()
+
+def _save_lineup(match_id, player_id, position, is_substitute):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO lineups (match_id, player_id, position, is_substitute, club)
+        VALUES (?,?,?,?,?)
+    ''', (match_id, player_id, position, is_substitute, st.session_state.club))
+    conn.commit()
+    st.session_state.lineups = _load_lineups()
+
+def _clear_lineup(match_id):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM lineups WHERE match_id=? AND club=?", (match_id, st.session_state.club))
+    conn.commit()
+    st.session_state.lineups = _load_lineups()
+
+def _get_lineup_for_match(match_id):
+    if st.session_state.lineups:
+        return [l for l in st.session_state.lineups if l['match_id'] == match_id]
+    return []
 
 def _get_users():
     conn = st.session_state.db_conn
@@ -365,7 +459,7 @@ def verify_login(username, password):
     cursor.execute("SELECT role, club FROM users WHERE username=? AND password_hash=?", (username, hashed))
     result = cursor.fetchone()
     if result:
-        return result[0], result[1]  # role, club
+        return result[0], result[1]
     return None, None
 
 def logout():
@@ -375,7 +469,6 @@ def logout():
     st.rerun()
 
 def generate_pdf_receipt(data):
-    """Generate a PDF receipt for a transaction."""
     if not FPDF_AVAILABLE:
         return None
     pdf = FPDF()
@@ -396,7 +489,7 @@ def download_pdf_button(pdf_bytes, filename):
     st.markdown(href, unsafe_allow_html=True)
 
 def mock_openai_response(prompt):
-    return f"🤖 AI Coach: Based on your query '{prompt[:50]}...', we recommend focusing on stamina and passing drills. Consider reviewing player nutrition and injury prevention."
+    return f"🤖 AI Coach: Based on your query '{prompt[:50]}...', we recommend focusing on stamina and passing drills."
 
 def call_openai(prompt):
     if OPENAI_AVAILABLE and st.session_state.get('openai_api_key'):
@@ -426,27 +519,23 @@ def decrypt_sensitive(encrypted_text):
     return encrypted_text
 
 def image_to_bytes(image):
-    """Convert PIL Image to bytes for storage."""
     img_bytes = BytesIO()
     image.save(img_bytes, format='PNG')
     return img_bytes.getvalue()
 
 def bytes_to_image(img_bytes):
-    """Convert bytes to PIL Image for display."""
     if img_bytes:
         return Image.open(BytesIO(img_bytes))
     return None
 
 def simulate_whatsapp_message(report):
-    """Simulate sending WhatsApp message."""
     st.info(f"📱 WhatsApp message sent: {report[:100]}...")
 
 def simulate_email_report(report):
-    """Simulate sending email report."""
     st.info(f"📧 Email report sent to admins: {report[:100]}...")
 
 # ------------------------------
-# 4. SESSION STATE INITIALIZATION (now functions are defined)
+# 4. SESSION STATE INIT
 # ------------------------------
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
@@ -459,7 +548,7 @@ if 'club' not in st.session_state:
 if 'db_conn' not in st.session_state:
     st.session_state.db_conn = sqlite3.connect('dynamic_fc.db', check_same_thread=False)
     _create_tables()
-    _ensure_schema()  # Ensure all columns exist (migration)
+    _ensure_schema()
 if 'players' not in st.session_state:
     st.session_state.players = _load_players()
 if 'finances' not in st.session_state:
@@ -472,6 +561,10 @@ if 'transfers' not in st.session_state:
     st.session_state.transfers = _load_transfers()
 if 'tournaments' not in st.session_state:
     st.session_state.tournaments = _load_tournaments()
+if 'matches' not in st.session_state:
+    st.session_state.matches = _load_matches()
+if 'lineups' not in st.session_state:
+    st.session_state.lineups = _load_lineups()
 if 'training_logs' not in st.session_state:
     st.session_state.training_logs = []
 if 'messages' not in st.session_state:
@@ -480,7 +573,7 @@ if 'encryption_key' not in st.session_state and CRYPTO_AVAILABLE:
     st.session_state.encryption_key = Fernet.generate_key()
     st.session_state.cipher = Fernet(st.session_state.encryption_key)
 
-# Insert default superadmin if not exists (ensure it runs after tables exist)
+# Create default admin
 try:
     conn = st.session_state.db_conn
     cursor = conn.cursor()
@@ -493,12 +586,16 @@ try:
 except Exception as e:
     st.error(f"Error creating default admin: {e}")
 
+# Set OpenAI API key from user input (user will enter it in admin panel)
+if 'openai_api_key' not in st.session_state:
+    st.session_state.openai_api_key = None
+
 # ------------------------------
 # 5. SIDEBAR NAVIGATION
 # ------------------------------
 def navigation():
     with st.sidebar:
-        # Try multiple possible logo paths
+        # Logo
         logo_paths = ["sandbox:/mnt/data/yourfile.png", "Icon.png", "logo.png", "static/logo.png"]
         logo_displayed = False
         for path in logo_paths:
@@ -538,7 +635,8 @@ def navigation():
 
             menu_items = ["Dashboard", "Player Registration", "Finance", "Training",
                           "Transfer Window", "Health & Performance", "Investors",
-                          "Tournament Registration", "AI Assistant"]  # Added Tournament
+                          "Tournament Registration", "Match Fixtures", "Lineup Selection",
+                          "Formations Library", "AI Assistant"]
             if st.session_state.role in ['superadmin', 'admin']:
                 menu_items.append("Admin Panel")
             choice = st.radio("Go to", menu_items)
@@ -555,11 +653,13 @@ def navigation():
                     st.session_state.health_records = _load_health()
                     st.session_state.transfers = _load_transfers()
                     st.session_state.tournaments = _load_tournaments()
+                    st.session_state.matches = _load_matches()
+                    st.session_state.lineups = _load_lineups()
                     st.rerun()
             return choice
 
 # ------------------------------
-# 6. PAGE CONTENT FUNCTIONS
+# 6. PAGE CONTENT
 # ------------------------------
 def dashboard_page():
     st.title("📊 Dashboard")
@@ -605,13 +705,16 @@ def dashboard_page():
     profit = inc - exp
     st.write(f"Income: **${inc:,.2f}** | Expense: **${exp:,.2f}** | **Profit: ${profit:,.2f}**")
 
-    # Tournament participation summary
-    st.subheader("🏆 Tournament Participation")
-    if st.session_state.tournaments:
-        df_tourn = pd.DataFrame(st.session_state.tournaments)
-        st.dataframe(df_tourn[['tournament_name', 'season', 'team_category', 'status']])
+    st.subheader("📅 Upcoming Matches")
+    if st.session_state.matches:
+        df_matches = pd.DataFrame(st.session_state.matches)
+        upcoming = df_matches[df_matches['is_played'] == 0].sort_values('match_date')
+        if not upcoming.empty:
+            st.dataframe(upcoming[['match_date', 'opponent', 'venue', 'home_away']])
+        else:
+            st.info("No upcoming matches.")
     else:
-        st.info("No tournament registrations yet.")
+        st.info("No matches scheduled.")
 
 def player_registration_page():
     st.title("📝 Player Registration")
@@ -734,6 +837,8 @@ def player_registration_page():
 def finance_page():
     st.title("💰 Finance Management")
     st.markdown("### Detailed Income & Expenditure")
+    
+    is_admin = st.session_state.role in ['superadmin', 'admin']
 
     tab1, tab2, tab3 = st.tabs(["➕ Add Transaction", "📋 View Records", "📊 Profit Summary"])
 
@@ -771,7 +876,54 @@ def finance_page():
     with tab2:
         if st.session_state.finances:
             df = pd.DataFrame(st.session_state.finances)
-            st.dataframe(df)
+            if is_admin:
+                st.markdown("### Admin Controls - Edit/Delete Transactions")
+                for idx, row in df.iterrows():
+                    with st.expander(f"{row['date']} - {row['category']} - ${row['amount']:,.2f}"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button(f"✏️ Edit", key=f"edit_{row['id']}"):
+                                st.session_state.editing_finance = row.to_dict()
+                        with col2:
+                            if st.button(f"❌ Delete", key=f"delete_{row['id']}"):
+                                try:
+                                    _delete_finance(row['id'])
+                                    st.success("Transaction deleted!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                
+                if 'editing_finance' in st.session_state:
+                    st.markdown("### Edit Transaction")
+                    fin = st.session_state.editing_finance
+                    with st.form("edit_finance_form"):
+                        date = st.date_input("Date", value=datetime.datetime.strptime(fin['date'], '%Y-%m-%d').date())
+                        trans_type = st.radio("Type", ["income", "expense"], index=0 if fin['type']=='income' else 1)
+                        category = st.selectbox("Category", categories, index=categories.index(fin['category']) if fin['category'] in categories else 0)
+                        amount = st.number_input("Amount ($)", min_value=0.01, value=float(fin['amount']))
+                        description = st.text_area("Description", value=fin['description'])
+                        submitted = st.form_submit_button("Update Transaction")
+                        if submitted:
+                            try:
+                                fin_data = {
+                                    'date': date.strftime("%Y-%m-%d"),
+                                    'type': trans_type,
+                                    'category': category,
+                                    'amount': amount,
+                                    'description': description
+                                }
+                                _update_finance(fin['id'], fin_data)
+                                st.success("Transaction updated!")
+                                del st.session_state.editing_finance
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                    
+                    if st.button("Cancel Edit"):
+                        del st.session_state.editing_finance
+                        st.rerun()
+            else:
+                st.dataframe(df)
         else:
             st.info("No transactions yet.")
 
@@ -802,8 +954,13 @@ def finance_page():
 def training_page():
     st.title("🏋️ Training & Video Integration")
     st.subheader("Cone Training Drills")
-    # Embed a football training video (replace with actual team video)
-    video_url = "https://www.youtube.com/embed/3VqJp2oU8YE"  # Example football training video
+    
+    # Embed the YouTube channel
+    st.markdown("### AD Football Training Videos")
+    st.markdown("Check out our favorite training channel: [AD Football Training](https://www.youtube.com/@ADFootballTrainingVide)")
+    
+    # Embed a sample video (replace with actual video ID from channel)
+    video_url = "https://www.youtube.com/embed/3VqJp2oU8YE"  # Placeholder
     st.markdown(f'<iframe width="560" height="315" src="{video_url}" frameborder="0" allowfullscreen></iframe>', unsafe_allow_html=True)
 
     st.subheader("Performance Tracking")
@@ -1024,6 +1181,241 @@ def tournament_page():
     else:
         st.info("No tournaments registered yet.")
 
+def match_fixtures_page():
+    st.title("📅 Match Fixtures")
+    st.markdown("Schedule and manage match fixtures for all tournaments.")
+    
+    is_admin = st.session_state.role in ['superadmin', 'admin']
+
+    tab1, tab2 = st.tabs(["➕ Add Fixture", "📋 View & Update Fixtures"])
+
+    with tab1:
+        with st.form("fixture_form"):
+            if st.session_state.tournaments:
+                tournament_options = {t['id']: f"{t['tournament_name']} ({t['team_category']})" for t in st.session_state.tournaments}
+                tournament_id = st.selectbox("Select Tournament", options=list(tournament_options.keys()), format_func=lambda x: tournament_options[x])
+            else:
+                st.warning("No tournaments registered. Please register a tournament first.")
+                tournament_id = None
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                opponent = st.text_input("Opponent Team*")
+                match_date = st.date_input("Match Date")
+                match_time = st.text_input("Match Time (e.g., 16:00)")
+            with col2:
+                venue = st.text_input("Venue")
+                home_away = st.radio("Home/Away", ["home", "away"])
+                notes = st.text_area("Notes")
+            
+            submitted = st.form_submit_button("Add Fixture")
+            if submitted and tournament_id:
+                try:
+                    if not opponent:
+                        st.error("Opponent name is required.")
+                    else:
+                        match_data = {
+                            'tournament_id': tournament_id,
+                            'opponent': opponent,
+                            'match_date': match_date.strftime("%Y-%m-%d"),
+                            'match_time': match_time,
+                            'venue': venue,
+                            'home_away': home_away,
+                            'notes': notes
+                        }
+                        _save_match(match_data)
+                        st.success(f"Fixture against {opponent} added successfully!")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    with tab2:
+        if st.session_state.matches:
+            df_matches = pd.DataFrame(st.session_state.matches)
+            tournament_map = {t['id']: f"{t['tournament_name']} ({t['team_category']})" for t in st.session_state.tournaments}
+            df_matches['tournament'] = df_matches['tournament_id'].map(tournament_map)
+            
+            tournaments_list = ["All"] + list(tournament_map.values())
+            selected_tournament = st.selectbox("Filter by Tournament", tournaments_list)
+            
+            if selected_tournament != "All":
+                tourn_id = next((tid for tid, name in tournament_map.items() if name == selected_tournament), None)
+                if tourn_id:
+                    df_matches = df_matches[df_matches['tournament_id'] == tourn_id]
+            
+            upcoming = df_matches[df_matches['is_played'] == 0].sort_values('match_date')
+            played = df_matches[df_matches['is_played'] == 1].sort_values('match_date', ascending=False)
+            
+            st.subheader("📌 Upcoming Fixtures")
+            if not upcoming.empty:
+                for idx, match in upcoming.iterrows():
+                    with st.expander(f"{match['match_date']} - vs {match['opponent']} ({match['home_away']})"):
+                        st.write(f"**Time:** {match.get('match_time', 'TBA')}")
+                        st.write(f"**Venue:** {match.get('venue', 'TBA')}")
+                        st.write(f"**Tournament:** {match['tournament']}")
+                        
+                        if is_admin:
+                            st.markdown("### Update Match Result")
+                            with st.form(f"result_form_{match['id']}"):
+                                our_score = st.number_input(f"{st.session_state.club} Score", min_value=0, max_value=20, value=0, key=f"our_{match['id']}")
+                                opp_score = st.number_input(f"{match['opponent']} Score", min_value=0, max_value=20, value=0, key=f"opp_{match['id']}")
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    if st.form_submit_button("✅ Mark as Played"):
+                                        result = "win" if our_score > opp_score else "loss" if our_score < opp_score else "draw"
+                                        _update_match_result(match['id'], our_score, opp_score, 1, result)
+                                        st.success("Match result updated!")
+                                        st.rerun()
+                                with col2:
+                                    if st.form_submit_button("🗑️ Delete Fixture"):
+                                        # Implement delete if needed
+                                        st.warning("Delete functionality coming soon")
+            else:
+                st.info("No upcoming fixtures.")
+            
+            st.subheader("✅ Played Matches")
+            if not played.empty:
+                display_cols = ['match_date', 'opponent', 'our_score', 'opponent_score', 'result', 'home_away']
+                st.dataframe(played[display_cols])
+            else:
+                st.info("No played matches yet.")
+        else:
+            st.info("No fixtures added yet.")
+
+def lineup_selection_page():
+    st.title("📋 Lineup Selection")
+    st.markdown("Select starting XI and substitutes for upcoming matches.")
+    
+    is_admin = st.session_state.role in ['superadmin', 'admin']
+    if not is_admin:
+        st.warning("Only admins can set lineups.")
+        return
+
+    if not st.session_state.matches:
+        st.info("No matches available. Please add fixtures first.")
+        return
+
+    # Filter upcoming matches
+    upcoming_matches = [m for m in st.session_state.matches if m['is_played'] == 0]
+    if not upcoming_matches:
+        st.info("No upcoming matches to set lineup for.")
+        return
+
+    match_options = {m['id']: f"{m['match_date']} vs {m['opponent']} ({m['home_away']})" for m in upcoming_matches}
+    selected_match_id = st.selectbox("Select Match", options=list(match_options.keys()), format_func=lambda x: match_options[x])
+    selected_match = next((m for m in upcoming_matches if m['id'] == selected_match_id), None)
+
+    if not selected_match:
+        return
+
+    st.subheader(f"Lineup for {selected_match['match_date']} vs {selected_match['opponent']}")
+
+    # Show current lineup if any
+    current_lineup = _get_lineup_for_match(selected_match_id)
+    if current_lineup:
+        st.markdown("### Current Selected Players")
+        for entry in current_lineup:
+            player = next((p for p in st.session_state.players if p['id'] == entry['player_id']), None)
+            if player:
+                sub_text = " (Substitute)" if entry['is_substitute'] else ""
+                st.write(f"{player['name']} - {entry['position']}{sub_text}")
+    else:
+        st.info("No lineup set yet.")
+
+    # Form to add players to lineup
+    st.markdown("### Add Player to Lineup")
+    if not st.session_state.players:
+        st.warning("No players registered.")
+        return
+
+    with st.form("lineup_form"):
+        player_options = {p['id']: f"{p['name']} ({p['position']})" for p in st.session_state.players}
+        player_id = st.selectbox("Select Player", options=list(player_options.keys()), format_func=lambda x: player_options[x])
+        position = st.text_input("Position on field (e.g., GK, LB, CM, ST)")
+        is_substitute = st.checkbox("Is Substitute?")
+        submitted = st.form_submit_button("Add to Lineup")
+        if submitted:
+            try:
+                _save_lineup(selected_match_id, player_id, position, is_substitute)
+                st.success("Player added to lineup!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    if current_lineup:
+        if st.button("Clear Lineup for this Match"):
+            _clear_lineup(selected_match_id)
+            st.success("Lineup cleared!")
+            st.rerun()
+
+def formations_library_page():
+    st.title("⚽ Football Formations Library")
+    st.markdown("Explore different tactical formations used in modern football.")
+    
+    formations = {
+        "4-4-2": {
+            "description": "Classic English formation with two strikers. Provides balance between attack and defense.",
+            "strengths": ["Solid defensive structure", "Two strikers can pressure defenders", "Wide midfielders provide width"],
+            "weaknesses": ["Midfield can be overrun by three-man midfields", "Requires hard-working central midfielders"],
+            "image": "https://upload.wikimedia.org/wikipedia/commons/3/33/4-4-2_formation.svg"
+        },
+        "4-2-3-1": {
+            "description": "Modern formation with a single striker, three attacking midfielders, and two defensive midfielders.",
+            "strengths": ["Strong defensive cover", "Creative freedom for attacking mids", "Good width"],
+            "weaknesses": ["Striker can become isolated", "Requires fit full-backs"],
+            "image": "https://upload.wikimedia.org/wikipedia/commons/2/2a/4-2-3-1_formation.svg"
+        },
+        "4-3-3": {
+            "description": "Attacking formation with three forwards. Popularized by Johan Cruyff and modern teams.",
+            "strengths": ["High pressing", "Wide attacks", "Numerical superiority in midfield"],
+            "weaknesses": ["Full-backs exposed", "Requires versatile forwards"],
+            "image": "https://upload.wikimedia.org/wikipedia/commons/3/3b/4-3-3_formation.svg"
+        },
+        "3-5-2": {
+            "description": "Formation with three center-backs, wing-backs, and two strikers. Provides midfield dominance.",
+            "strengths": ["Midfield control", "Wing-backs provide width", "Two strikers up front"],
+            "weaknesses": ["Vulnerable to quick wingers", "Requires fit wing-backs"],
+            "image": "https://upload.wikimedia.org/wikipedia/commons/0/0a/3-5-2_formation.svg"
+        },
+        "4-1-4-1": {
+            "description": "Defensive shape that can transition to attack. One defensive midfielder shields the back four.",
+            "strengths": ["Compact defense", "Good transitions", "Solid against counter-attacks"],
+            "weaknesses": ["Striker isolated", "Lacks creative spark"],
+            "image": "https://upload.wikimedia.org/wikipedia/commons/1/1a/4-1-4-1_formation.svg"
+        },
+        "4-1-3-2": {
+            "description": "Variation of 4-4-2 with a diamond midfield. One defensive midfielder, two wide, one attacking.",
+            "strengths": ["Central midfield dominance", "Two strikers", "Creative freedom"],
+            "weaknesses": ["Narrow shape", "Full-backs need to provide width"],
+            "image": "https://upload.wikimedia.org/wikipedia/commons/4/4f/4-1-3-2_formation.svg"
+        },
+        "5-4-1": {
+            "description": "Very defensive formation with five defenders. Often used to protect a lead or against stronger opponents.",
+            "strengths": ["Very solid defensively", "Difficult to break down", "Good for counter-attacks"],
+            "weaknesses": ["Lacks attacking threat", "Lonely striker", "Requires disciplined defending"],
+            "image": "https://upload.wikimedia.org/wikipedia/commons/9/9a/5-4-1_formation.svg"
+        },
+        "3-2-4-1": {
+            "description": "Modern possession-based formation. Three center-backs, two defensive midfielders, four attacking midfielders, one striker.",
+            "strengths": ["Overloads midfield", "Control possession", "Flexible attacking options"],
+            "weaknesses": ["Vulnerable to quick counters", "Requires very fit players"],
+            "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6c/3-2-4-1_formation.svg/1200px-3-2-4-1_formation.svg.png"
+        }
+    }
+    
+    selected = st.selectbox("Select Formation", list(formations.keys()))
+    if selected:
+        f = formations[selected]
+        st.subheader(selected)
+        st.write(f["description"])
+        st.markdown("**Strengths:**")
+        for s in f["strengths"]:
+            st.markdown(f"- {s}")
+        st.markdown("**Weaknesses:**")
+        for w in f["weaknesses"]:
+            st.markdown(f"- {w}")
+        st.image(f["image"], caption=f"{selected} Formation", width=400)
+
 def ai_assistant_page():
     st.title("🤖 AI Assistant")
     st.markdown("Ask anything about football management, training tactics, player health, or finance.")
@@ -1127,7 +1519,8 @@ def admin_panel_page():
 
     with tab3:
         st.subheader("OpenAI API Key")
-        api_key = st.text_input("Enter OpenAI API Key", type="password")
+        # Use the key provided by user (they can paste it)
+        api_key = st.text_input("Enter OpenAI API Key", type="password", value=st.session_state.openai_api_key or "")
         if api_key:
             st.session_state.openai_api_key = api_key
             st.success("API key saved for this session.")
@@ -1173,11 +1566,12 @@ def admin_panel_page():
         - SQLite database with parameterized queries prevents injection.
         - Optional encryption for sensitive fields.
         - Session management via Streamlit state.
+        - Admin-only edit/delete controls for finance.
         - In production, use HTTPS, environment variables for secrets, and a cloud database with encryption at rest.
         """)
 
 # ------------------------------
-# 7. MAIN APP LOGIC
+# 7. MAIN APP
 # ------------------------------
 def main():
     try:
@@ -1205,6 +1599,12 @@ def main():
             investors_page()
         elif choice == "Tournament Registration":
             tournament_page()
+        elif choice == "Match Fixtures":
+            match_fixtures_page()
+        elif choice == "Lineup Selection":
+            lineup_selection_page()
+        elif choice == "Formations Library":
+            formations_library_page()
         elif choice == "AI Assistant":
             ai_assistant_page()
         elif choice == "Admin Panel":
@@ -1214,4 +1614,4 @@ def main():
         st.info("The app has self-healing capabilities. Please try again or contact support.")
 
 if __name__ == "__main__":
-    main()
+    main() 

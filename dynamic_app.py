@@ -676,6 +676,7 @@ def navigation():
                             st.error("Email already registered.")
                         else:
                             try:
+                                # New users get 'viewer' role by default
                                 _add_user(new_username, email, full_name, new_password, 'viewer', st.session_state.club)
                                 st.success("Registration successful! Please login.")
                                 st.session_state.show_registration = False
@@ -1586,7 +1587,7 @@ def admin_panel_page():
 
     with tab3:
         st.subheader("OpenAI API Key")
-        # Allow user to input the key (the placeholder provided is sk-...8SQA)
+        # Allow user to input the key
         api_key = st.text_input("Enter OpenAI API Key", type="password", value=st.session_state.openai_api_key or "")
         if api_key:
             st.session_state.openai_api_key = api_key

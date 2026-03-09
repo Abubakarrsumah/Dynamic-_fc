@@ -2,6 +2,7 @@
 DYNAMIC FC - Football Management System (Falaba District)
 Professional club management application with all requested features including tournament registration,
 match fixtures, formation library, lineup selection, and comprehensive financial controls.
+Currency: Sierra Leonean Leone (Le)
 Run with: streamlit run football_app.py
 """
 
@@ -19,6 +20,7 @@ import sqlite3
 import base64
 import os
 import uuid
+import re
 from io import BytesIO
 from PIL import Image
 import plotly.express as px
@@ -60,11 +62,13 @@ def _create_tables():
     """Create all necessary tables."""
     conn = st.session_state.db_conn
     cursor = conn.cursor()
-    # Users
+    # Users table (with email and full name)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE,
+            email TEXT UNIQUE,
+            full_name TEXT,
             password_hash TEXT,
             role TEXT,
             club TEXT
@@ -166,7 +170,7 @@ def _create_tables():
             club TEXT
         )
     ''')
-    # Lineups (NEW)
+    # Lineups
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS lineups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,6 +198,10 @@ def _ensure_schema():
             except:
                 pass
 
+    # Add email and full_name to users if missing
+    add_column_if_not_exists('users', 'email', 'TEXT')
+    add_column_if_not_exists('users', 'full_name', 'TEXT')
+    
     for table in ['players', 'finances', 'investors', 'health', 'transfers', 'tournaments', 'matches', 'lineups']:
         add_column_if_not_exists(table, 'club', 'TEXT')
     add_column_if_not_exists('players', 'photo', 'BLOB')
@@ -424,15 +432,15 @@ def _get_lineup_for_match(match_id):
 def _get_users():
     conn = st.session_state.db_conn
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, role, club FROM users")
+    cursor.execute("SELECT id, username, email, full_name, role, club FROM users")
     return cursor.fetchall()
 
-def _add_user(username, password, role, club):
+def _add_user(username, email, full_name, password, role, club):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     hashed = hashlib.sha256(password.encode()).hexdigest()
-    cursor.execute("INSERT INTO users (username, password_hash, role, club) VALUES (?,?,?,?)",
-                   (username, hashed, role, club))
+    cursor.execute("INSERT INTO users (username, email, full_name, password_hash, role, club) VALUES (?,?,?,?,?,?)",
+                   (username, email, full_name, hashed, role, club))
     conn.commit()
 
 def _delete_user(user_id):
@@ -448,6 +456,18 @@ def _change_password(username, new_password):
     cursor.execute("UPDATE users SET password_hash=? WHERE username=?", (hashed, username))
     conn.commit()
 
+def _get_user_by_username(username):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE username=?", (username,))
+    return cursor.fetchone()
+
+def _get_user_by_email(email):
+    conn = st.session_state.db_conn
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE email=?", (email,))
+    return cursor.fetchone()
+
 # Utility functions
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
@@ -456,7 +476,8 @@ def verify_login(username, password):
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     hashed = hash_password(password)
-    cursor.execute("SELECT role, club FROM users WHERE username=? AND password_hash=?", (username, hashed))
+    # Allow login with username or email
+    cursor.execute("SELECT role, club FROM users WHERE (username=? OR email=?) AND password_hash=?", (username, username, hashed))
     result = cursor.fetchone()
     if result:
         return result[0], result[1]
@@ -468,6 +489,10 @@ def logout():
     st.session_state.role = 'guest'
     st.rerun()
 
+def validate_email(email):
+    pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+    return re.match(pattern, email) is not None
+
 def generate_pdf_receipt(data):
     if not FPDF_AVAILABLE:
         return None
@@ -478,7 +503,7 @@ def generate_pdf_receipt(data):
     pdf.cell(200, 10, txt=f"Date: {data['date']}", ln=1)
     pdf.cell(200, 10, txt=f"Type: {data['type']}", ln=1)
     pdf.cell(200, 10, txt=f"Category: {data['category']}", ln=1)
-    pdf.cell(200, 10, txt=f"Amount: ${data['amount']:.2f}", ln=1)
+    pdf.cell(200, 10, txt=f"Amount: Le {data['amount']:,.2f}", ln=1)
     pdf.cell(200, 10, txt=f"Description: {data['description']}", ln=1)
     pdf_str = pdf.output(dest='S').encode('latin1')
     return pdf_str
@@ -573,20 +598,20 @@ if 'encryption_key' not in st.session_state and CRYPTO_AVAILABLE:
     st.session_state.encryption_key = Fernet.generate_key()
     st.session_state.cipher = Fernet(st.session_state.encryption_key)
 
-# Create default admin
+# Create default admin if not exists
 try:
     conn = st.session_state.db_conn
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE username='admin'")
     if not cursor.fetchone():
         hashed = hashlib.sha256('admin123'.encode()).hexdigest()
-        cursor.execute("INSERT INTO users (username, password_hash, role, club) VALUES (?,?,?,?)",
-                       ('admin', hashed, 'superadmin', 'Dynamic FC (Falaba District)'))
+        cursor.execute("INSERT INTO users (username, email, full_name, password_hash, role, club) VALUES (?,?,?,?,?,?)",
+                       ('admin', 'admin@dynamicfc.com', 'System Administrator', hashed, 'superadmin', 'Dynamic FC (Falaba District)'))
         conn.commit()
 except Exception as e:
     st.error(f"Error creating default admin: {e}")
 
-# Set OpenAI API key from user input (user will enter it in admin panel)
+# Set OpenAI API key from user input
 if 'openai_api_key' not in st.session_state:
     st.session_state.openai_api_key = None
 
@@ -611,7 +636,7 @@ def navigation():
         if not st.session_state.authenticated:
             st.subheader("🔐 Login")
             with st.form("login_form"):
-                username = st.text_input("Username")
+                username = st.text_input("Username or Email")
                 password = st.text_input("Password", type="password")
                 submitted = st.form_submit_button("Login")
                 if submitted:
@@ -624,9 +649,42 @@ def navigation():
                         st.success("Login successful!")
                         st.rerun()
                     else:
-                        st.error("Invalid username or password")
+                        st.error("Invalid username/email or password")
             st.markdown("---")
-            st.info("Demo credentials: admin / admin123")
+            if st.button("Create New Account"):
+                st.session_state.show_registration = True
+                st.rerun()
+            if st.session_state.get('show_registration', False):
+                with st.form("register_form"):
+                    st.subheader("Register")
+                    full_name = st.text_input("Full Name*")
+                    email = st.text_input("Email*")
+                    new_username = st.text_input("Username*")
+                    new_password = st.text_input("Password*", type="password")
+                    confirm_password = st.text_input("Confirm Password*", type="password")
+                    submitted_reg = st.form_submit_button("Register")
+                    if submitted_reg:
+                        if not full_name or not email or not new_username or not new_password:
+                            st.error("All fields are required.")
+                        elif new_password != confirm_password:
+                            st.error("Passwords do not match.")
+                        elif not validate_email(email):
+                            st.error("Invalid email format.")
+                        elif _get_user_by_username(new_username):
+                            st.error("Username already exists.")
+                        elif _get_user_by_email(email):
+                            st.error("Email already registered.")
+                        else:
+                            try:
+                                _add_user(new_username, email, full_name, new_password, 'viewer', st.session_state.club)
+                                st.success("Registration successful! Please login.")
+                                st.session_state.show_registration = False
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Registration error: {e}")
+                if st.button("Back to Login"):
+                    st.session_state.show_registration = False
+                    st.rerun()
             return None
         else:
             st.write(f"Welcome, **{st.session_state.username}** ({st.session_state.role})")
@@ -671,7 +729,7 @@ def dashboard_page():
     with col2:
         total_income = sum(f['amount'] for f in st.session_state.finances if f['type'] == 'income')
         total_expense = sum(f['amount'] for f in st.session_state.finances if f['type'] == 'expense')
-        st.metric("Net Balance", f"${total_income - total_expense:,.2f}")
+        st.metric("Net Balance", f"Le {total_income - total_expense:,.2f}")
     with col3:
         injured = len([h for h in st.session_state.health_records if h['status'] == 'injured'])
         st.metric("Injured Players", injured)
@@ -681,7 +739,9 @@ def dashboard_page():
     st.subheader("📈 Financial Overview")
     if st.session_state.finances:
         df_fin = pd.DataFrame(st.session_state.finances)
-        fig = px.bar(df_fin, x='date', y='amount', color='type', title='Income vs Expense', barmode='group')
+        # Convert amount to float for plotting
+        df_fin['amount'] = df_fin['amount'].astype(float)
+        fig = px.bar(df_fin, x='date', y='amount', color='type', title='Income vs Expense (Le)', barmode='group')
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No financial data yet.")
@@ -703,7 +763,7 @@ def dashboard_page():
     inc = sum(f['amount'] for f in recent if f['type'] == 'income')
     exp = sum(f['amount'] for f in recent if f['type'] == 'expense')
     profit = inc - exp
-    st.write(f"Income: **${inc:,.2f}** | Expense: **${exp:,.2f}** | **Profit: ${profit:,.2f}**")
+    st.write(f"Income: **Le {inc:,.2f}** | Expense: **Le {exp:,.2f}** | **Profit: Le {profit:,.2f}**")
 
     st.subheader("📅 Upcoming Matches")
     if st.session_state.matches:
@@ -733,7 +793,7 @@ def player_registration_page():
             with col2:
                 nationality = st.text_input("Nationality")
                 contract = st.date_input("Contract Until")
-                salary = st.number_input("Monthly Salary ($)", min_value=0.0, step=100.0)
+                salary = st.number_input("Monthly Salary (Le)", min_value=0.0, step=1000.0)
                 photo = st.file_uploader("Upload Player Photo", type=['png', 'jpg', 'jpeg'])
             submitted = st.form_submit_button("Register Player")
             if submitted:
@@ -776,7 +836,7 @@ def player_registration_page():
                     with col2:
                         nationality = st.text_input("Nationality", value=player['nationality'])
                         contract = st.date_input("Contract Until", value=datetime.datetime.strptime(player['contract_until'], '%Y-%m-%d').date())
-                        salary = st.number_input("Monthly Salary ($)", min_value=0.0, value=player['monthly_salary'])
+                        salary = st.number_input("Monthly Salary (Le)", min_value=0.0, value=player['monthly_salary'])
                         photo = st.file_uploader("Upload New Photo (leave empty to keep current)", type=['png', 'jpg', 'jpeg'])
                     submitted = st.form_submit_button("Update Player")
                     if submitted:
@@ -830,13 +890,13 @@ def player_registration_page():
                     st.write(f"**Age:** {player['age']}")
                     st.write(f"**Nationality:** {player['nationality']}")
                     st.write(f"**Contract until:** {player['contract_until']}")
-                    st.write(f"**Monthly Salary:** ${player['monthly_salary']:,.2f}")
+                    st.write(f"**Monthly Salary:** Le {player['monthly_salary']:,.2f}")
     else:
         st.info("No players registered yet.")
 
 def finance_page():
     st.title("💰 Finance Management")
-    st.markdown("### Detailed Income & Expenditure")
+    st.markdown("### Detailed Income & Expenditure (Currency: Le)")
     
     is_admin = st.session_state.role in ['superadmin', 'admin']
 
@@ -852,7 +912,7 @@ def finance_page():
                 "Salaries", "Bonuses", "Equipment", "Medical", "Other"
             ]
             category = st.selectbox("Category", categories)
-            amount = st.number_input("Amount ($)", min_value=0.01, step=10.0)
+            amount = st.number_input("Amount (Le)", min_value=0.01, step=1000.0)
             description = st.text_area("Description")
             submitted = st.form_submit_button("Add Transaction")
             if submitted:
@@ -879,7 +939,7 @@ def finance_page():
             if is_admin:
                 st.markdown("### Admin Controls - Edit/Delete Transactions")
                 for idx, row in df.iterrows():
-                    with st.expander(f"{row['date']} - {row['category']} - ${row['amount']:,.2f}"):
+                    with st.expander(f"{row['date']} - {row['category']} - Le {row['amount']:,.2f}"):
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.button(f"✏️ Edit", key=f"edit_{row['id']}"):
@@ -900,7 +960,7 @@ def finance_page():
                         date = st.date_input("Date", value=datetime.datetime.strptime(fin['date'], '%Y-%m-%d').date())
                         trans_type = st.radio("Type", ["income", "expense"], index=0 if fin['type']=='income' else 1)
                         category = st.selectbox("Category", categories, index=categories.index(fin['category']) if fin['category'] in categories else 0)
-                        amount = st.number_input("Amount ($)", min_value=0.01, value=float(fin['amount']))
+                        amount = st.number_input("Amount (Le)", min_value=0.01, value=float(fin['amount']))
                         description = st.text_area("Description", value=fin['description'])
                         submitted = st.form_submit_button("Update Transaction")
                         if submitted:
@@ -933,9 +993,9 @@ def finance_page():
             income = df[df['type'] == 'income']['amount'].sum()
             expense = df[df['type'] == 'expense']['amount'].sum()
             profit = income - expense
-            st.metric("Total Income", f"${income:,.2f}")
-            st.metric("Total Expense", f"${expense:,.2f}")
-            st.metric("Net Profit", f"${profit:,.2f}")
+            st.metric("Total Income", f"Le {income:,.2f}")
+            st.metric("Total Expense", f"Le {expense:,.2f}")
+            st.metric("Net Profit", f"Le {profit:,.2f}")
 
             st.subheader("Expense Breakdown")
             expense_df = df[df['type'] == 'expense'].groupby('category')['amount'].sum().reset_index()
@@ -994,7 +1054,7 @@ def training_page():
 
 def transfer_window_page():
     st.title("🔄 Transfer Window")
-    st.markdown("Record player transfers (incoming and outgoing) including fees.")
+    st.markdown("Record player transfers (incoming and outgoing) including fees (Le).")
 
     with st.form("transfer_form"):
         col1, col2 = st.columns(2)
@@ -1004,7 +1064,7 @@ def transfer_window_page():
             from_club = st.text_input("From Club")
             to_club = st.text_input("To Club")
         with col2:
-            transfer_fee = st.number_input("Transfer Fee ($)", min_value=0.0, step=1000.0)
+            transfer_fee = st.number_input("Transfer Fee (Le)", min_value=0.0, step=100000.0)
             date = st.date_input("Transfer Date", datetime.date.today())
             notes = st.text_area("Notes")
         submitted = st.form_submit_button("Record Transfer")
@@ -1033,8 +1093,8 @@ def transfer_window_page():
         st.dataframe(df)
         total_fees_in = sum(t['transfer_fee'] for t in st.session_state.transfers if t['transfer_type'] == 'incoming')
         total_fees_out = sum(t['transfer_fee'] for t in st.session_state.transfers if t['transfer_type'] == 'outgoing')
-        st.metric("Total Incoming Fees", f"${total_fees_in:,.2f}")
-        st.metric("Total Outgoing Fees", f"${total_fees_out:,.2f}")
+        st.metric("Total Incoming Fees", f"Le {total_fees_in:,.2f}")
+        st.metric("Total Outgoing Fees", f"Le {total_fees_out:,.2f}")
     else:
         st.info("No transfers recorded yet.")
 
@@ -1107,11 +1167,11 @@ def health_performance_page():
 
 def investors_page():
     st.title("💰 Investor Contributions")
-    st.markdown("Record and track investments into the club.")
+    st.markdown("Record and track investments into the club (Le).")
 
     with st.form("investor_form"):
         name = st.text_input("Investor Name*")
-        contribution = st.number_input("Contribution Amount ($)", min_value=0.0, step=100.0)
+        contribution = st.number_input("Contribution Amount (Le)", min_value=0.0, step=100000.0)
         date = st.date_input("Date", datetime.date.today())
         notes = st.text_area("Notes")
         submitted = st.form_submit_button("Record Contribution")
@@ -1136,7 +1196,7 @@ def investors_page():
         df = pd.DataFrame(st.session_state.investors)
         st.dataframe(df)
         total = df['contribution'].sum()
-        st.metric("Total Contributions", f"${total:,.2f}")
+        st.metric("Total Contributions", f"Le {total:,.2f}")
     else:
         st.info("No investors yet.")
 
@@ -1268,8 +1328,8 @@ def match_fixtures_page():
                                         st.rerun()
                                 with col2:
                                     if st.form_submit_button("🗑️ Delete Fixture"):
-                                        # Implement delete if needed
-                                        st.warning("Delete functionality coming soon")
+                                        # For now, just a warning
+                                        st.warning("Delete functionality can be added if needed.")
             else:
                 st.info("No upcoming fixtures.")
             
@@ -1453,21 +1513,28 @@ def admin_panel_page():
         st.subheader("Add New User")
         with st.form("add_user_form"):
             new_username = st.text_input("Username")
+            new_email = st.text_input("Email")
+            new_full_name = st.text_input("Full Name")
             new_password = st.text_input("Password", type="password")
             new_role = st.selectbox("Role", ["admin", "manager", "viewer"])
             new_club = st.text_input("Club (default: current club)", value=st.session_state.club)
             submitted = st.form_submit_button("Create User")
             if submitted:
                 try:
-                    _add_user(new_username, new_password, new_role, new_club)
-                    st.success(f"User {new_username} created.")
+                    if _get_user_by_username(new_username):
+                        st.error("Username already exists.")
+                    elif _get_user_by_email(new_email):
+                        st.error("Email already registered.")
+                    else:
+                        _add_user(new_username, new_email, new_full_name, new_password, new_role, new_club)
+                        st.success(f"User {new_username} created.")
                 except Exception as e:
                     st.error(f"Error: {e}")
 
         st.subheader("Existing Users")
         users = _get_users()
         if users:
-            df_users = pd.DataFrame(users, columns=["ID", "Username", "Role", "Club"])
+            df_users = pd.DataFrame(users, columns=["ID", "Username", "Email", "Full Name", "Role", "Club"])
             st.dataframe(df_users)
 
             st.subheader("Delete User")
@@ -1519,7 +1586,7 @@ def admin_panel_page():
 
     with tab3:
         st.subheader("OpenAI API Key")
-        # Use the key provided by user (they can paste it)
+        # Allow user to input the key (the placeholder provided is sk-...8SQA)
         api_key = st.text_input("Enter OpenAI API Key", type="password", value=st.session_state.openai_api_key or "")
         if api_key:
             st.session_state.openai_api_key = api_key
@@ -1529,11 +1596,16 @@ def admin_panel_page():
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📧 Send Daily Email Report"):
-                report = f"Daily report for {st.session_state.club}: Players: {len(st.session_state.players)}, Net Balance: ${sum(f['amount'] for f in st.session_state.finances if f['type']=='income') - sum(f['amount'] for f in st.session_state.finances if f['type']=='expense'):,.2f}"
+                total_income = sum(f['amount'] for f in st.session_state.finances if f['type'] == 'income')
+                total_expense = sum(f['amount'] for f in st.session_state.finances if f['type'] == 'expense')
+                net = total_income - total_expense
+                report = f"Daily report for {st.session_state.club}: Players: {len(st.session_state.players)}, Net Balance: Le {net:,.2f}"
                 simulate_email_report(report)
         with col2:
             if st.button("📱 Send WhatsApp Report"):
-                report = f"WhatsApp report: {st.session_state.club} - Investors: {len(st.session_state.investors)}, Recent transfers: {len(st.session_state.transfers)}"
+                total_investors = len(st.session_state.investors)
+                recent_transfers = len(st.session_state.transfers)
+                report = f"WhatsApp report: {st.session_state.club} - Investors: {total_investors}, Recent transfers: {recent_transfers}"
                 simulate_whatsapp_message(report)
 
         st.subheader("Fingerprint Login Simulation")
@@ -1577,10 +1649,11 @@ def main():
     try:
         choice = navigation()
         if choice is None:
+            # Not logged in, show welcome
             st.title("⚽ Welcome to Dynamic FC Management System")
             st.markdown("### Falaba District's Premier Football Club Management Software")
             st.image("https://via.placeholder.com/800x200?text=Dynamic+FC+Falaba+District", use_container_width=True)
-            st.markdown("Please log in using the sidebar to access the dashboard.")
+            st.markdown("Please log in using the sidebar. New users can create an account.")
             return
 
         if choice == "Dashboard":
@@ -1614,4 +1687,4 @@ def main():
         st.info("The app has self-healing capabilities. Please try again or contact support.")
 
 if __name__ == "__main__":
-    main() 
+    main()
